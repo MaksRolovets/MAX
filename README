@@ -1,0 +1,12 @@
+Смотри, щапуск через файл max_polling_bot, докачивай библиотеки, и сюда напиши пожалуйста изменения внесенные, можешь нейронку запречь. и пожалуйста не забудь закоммитить изменения и выложить на гит
+вот комманды 
+для коммита 
+git init
+git commit -m "first commit"
+git remote add origin https://github.com/MaksRolovets/MAX.git
+
+git remote add origin https://github.com/MaksRolovets/MAX.git
+git branch -M master
+git push -u origin master
+
+у нас ветка мастер
