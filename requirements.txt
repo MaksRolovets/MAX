@@ -1,0 +1,6 @@
+﻿fastapi
+uvicorn
+requests
+maxapi
+gspread
+google-auth
