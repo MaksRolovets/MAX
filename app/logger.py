@@ -1,9 +1,12 @@
-﻿import json
+import json
 import os
 import time
 import uuid
 
-LOG_PATH = os.getenv("MAX_LOG_PATH", "E:\\MAX\\logs\\max-dev.log.jsonl")
+LOG_PATH = os.getenv("MAX_LOG_PATH", os.path.join(
+    os.getenv("MAX_BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "logs", "max-dev.log.jsonl",
+))
 LOG_TO_STDOUT = os.getenv("LOG_TO_STDOUT", "1") == "1"
 LOG_TO_SHEETS = os.getenv("LOG_TO_SHEETS", "0") == "1"
 
@@ -41,7 +44,6 @@ def log_event(event: str, trace_id: str | None = None, **data) -> None:
     if LOG_TO_SHEETS:
         try:
             from app.google_sheets import append_log
-
             append_log(record)
         except Exception as e:
             err = {"event": "sheets_error", "error": str(e)}

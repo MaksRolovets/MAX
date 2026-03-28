@@ -1,6 +1,6 @@
-﻿fastapi
+fastapi
 uvicorn
 requests
-maxapi
 gspread
 google-auth
+python-dotenv

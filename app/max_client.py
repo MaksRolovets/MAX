@@ -1,4 +1,4 @@
-﻿import os
+import os
 import requests
 
 from app.logger import log_event
@@ -7,14 +7,7 @@ API_BASE = os.getenv("MAX_API_BASE", "https://platform-api.max.ru")
 
 TOKEN = os.getenv("MAX_BOT_TOKEN")
 if not TOKEN:
-    try:
-        from max_bot_webhook import TOKEN as FILE_TOKEN
-        TOKEN = FILE_TOKEN
-    except Exception:
-        TOKEN = None
-
-if not TOKEN:
-    raise RuntimeError("MAX_BOT_TOKEN is not set and no token found in max_bot_webhook.py")
+    raise RuntimeError("MAX_BOT_TOKEN is not set. Set it as an environment variable.")
 
 
 def _headers():
@@ -25,7 +18,7 @@ def _headers():
 
 
 def send_message(user_id: int, payload: dict, trace_id: str | None = None):
-    log_event("http_request", trace_id, method="POST", path="/messages", user_id=user_id, payload=payload)
+    log_event("http_request", trace_id, method="POST", path="/messages", user_id=user_id)
     resp = requests.post(
         f"{API_BASE}/messages",
         params={"user_id": user_id},
@@ -38,7 +31,7 @@ def send_message(user_id: int, payload: dict, trace_id: str | None = None):
 
 
 def answer_callback(callback_id: str, body: dict, trace_id: str | None = None):
-    log_event("http_request", trace_id, method="POST", path="/answers", callback_id=callback_id, payload=body)
+    log_event("http_request", trace_id, method="POST", path="/answers", callback_id=callback_id)
     resp = requests.post(
         f"{API_BASE}/answers",
         params={"callback_id": callback_id},

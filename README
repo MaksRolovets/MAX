@@ -1,12 +1,126 @@
-Смотри, щапуск через файл max_polling_bot, докачивай библиотеки, и сюда напиши пожалуйста изменения внесенные, можешь нейронку запречь. и пожалуйста не забудь закоммитить изменения и выложить на гит
-вот комманды 
-для коммита 
-git init
-git commit -m "first commit"
-git remote add origin https://github.com/MaksRolovets/MAX.git
+# MAX Bot — бот компании для мессенджера MAX
 
-git remote add origin https://github.com/MaksRolovets/MAX.git
-git branch -M master
-git push -u origin master
+Перенос Telegram-бота из n8n в Python-код для платформы MAX.
 
-у нас ветка мастер
+---
+
+## Что сделано
+
+### 1. Полная маршрутизация callback-кнопок (33 обработчика)
+- Главное меню (10 кнопок: создать заказ, вопрос по заказу, ЛК, финансы, упаковка, обратный звонок, услуги, договор, перезаключение, отзыв)
+- Подменю «Создать заказ» — РФ / Международная
+- Подменю «Вопросы по заказу» — отследить, дата, изменения, другое
+- Подменю «Личный кабинет» — восстановить доступ, обучение, PDF-памятка
+- Подменю «Финансы» — акт сверки, счёт, вопрос по счету
+- Подменю «Упаковка» — платная (полный каталог с корзиной) / бесплатная
+
+### 2. State machine (машина состояний)
+- Состояния хранятся в Google Sheets (user_states), как в n8n
+- Бот запоминает, что ожидает от пользователя (ИНН, номер заказа, и т.д.)
+- Состояния: waiting_message, waiting_klo, waiting_buh, waiting_pro, admin_waiting_*
+
+### 3. Пересылка запросов менеджерам
+- waiting_message → ищет менеджера по ИНН/договору через таблицы «Клиенты ИНН» и «Менеджеры»
+- waiting_klo → пересылка в КЛО (с ротацией по спецдням)
+- waiting_buh → пересылка бухгалтеру (двум)
+- waiting_pro → пересылка продажнику
+- Если менеджер не найден → отправка в общий чат
+- Форматированное сообщение с источником, именем, ID, телефоном
+
+### 4. Ответ менеджера клиенту
+- message_map в Google Sheets — связка сообщения менеджера с клиентом
+- Когда менеджер отвечает на сообщение бота — ответ пересылается клиенту
+
+### 5. Парсинг ИНН и договоров
+- ИНН: 10 или 12 цифр
+- Договоры: все форматы СДЭК (SZ-LBS2-21, ИМ1231247522, КУ-СЗ-123, ДЛП, ЛБС, НДИМ, НДДЛП и т.д.)
+
+### 6. Каталог платной упаковки + корзина
+- 13 категорий, 60+ товаров с ценами
+- Карточка товара с +/- количества
+- Добавление в корзину (Google Sheets)
+- Просмотр корзины с итогами
+- Очистка корзины
+- Оформление заказа (checkout → запрос ИНН → пересылка в КЛО)
+
+### 7. Админ-команда /change_manager
+- Массовая замена менеджера у всех клиентов
+- Трёхшаговый диалог: старое имя → новое имя → новый ID
+
+### 8. Инфраструктура
+- Единая авторизация Google Sheets (sheets_base.py)
+- Обработка ошибок в polling (бот не падает при сбоях сети)
+- Логирование в файл + stdout + Google Sheets (опционально)
+- Токен вынесен в переменные окружения (убран из кода)
+- .env.example с описанием всех переменных
+- .gitignore: .env, secrets/, logs/, __pycache__/
+
+---
+
+## Что осталось для полной работоспособности
+
+### Обязательно (без этого не заработает):
+1. **Создать файл `.env`** — скопировать из `.env.example` и заполнить:
+   - `MAX_BOT_TOKEN` — токен бота MAX
+   - `GSHEET_STATES_ID` — ID таблицы user_states
+   - `GSHEET_MANAGERS_ID` — ID таблицы менеджеров
+   - `GSHEET_CLIENTS_ID` — ID таблицы клиентов (ИНН)
+   - `GSHEET_PHONES_ID` — ID таблицы телефонов
+   - `GSHEET_LOGS_ID` — ID таблицы логов
+   - `GSHEET_MSGMAP_ID` — ID таблицы message_map
+2. **Заполнить ID получателей** в `.env`:
+   - `KLO_USER_ID` — MAX user_id сотрудника КЛО
+   - `KLO_USER_ID_ROTATION` — MAX user_id КЛО для ротации
+   - `ACCOUNTANT_USER_ID` / `ACCOUNTANT2_USER_ID` — бухгалтеры
+   - `SALES_USER_ID` — продажник
+   - `GENERAL_CHAT_ID` — общий чат (fallback)
+   - `ADMIN_USER_ID` — админ для /change_manager
+3. **Создать Google Sheets таблицы** с заголовками:
+   - user_states: `user_id | state | order_number | inn | comment | manager_id | topic | timestamp`
+   - managers: `manager_name | telegram_id`
+   - phones: `user_id | number`
+   - message_map: `manager_message_id | client_user_id | client_chat_id | manager_chat_id | timestamp`
+   - logs: `timestamp | user_id | action | chat_id | result | comment`
+4. **Расшарить все таблицы** на сервисный аккаунт Google (email из google_sa.json)
+5. **Положить `google_sa.json`** в папку `secrets/`
+
+### Желательно:
+6. Заменить ссылку на PDF-памятку (`get_pdf` callback в router.py) на реальную ссылку Google Drive
+7. Заполнить `KLO_SPECIAL_DAYS` в .env (даты ротации КЛО в формате MM-DD через запятую)
+8. Протестировать каждую ветку меню на реальном MAX-аккаунте
+9. Настроить сбор телефонов (в MAX нет кнопки «Поделиться контактом» как в Telegram — нужен альтернативный способ)
+
+---
+
+## Запуск
+
+```bash
+pip install -r requirements.txt
+# Заполни .env файл
+python max_bot_polling.py
+```
+
+---
+
+## Структура проекта
+
+```
+max_bot_polling.py          — точка входа (polling)
+app/
+  settings.py               — все настройки и ID таблиц
+  router.py                 — главный маршрутизатор (вся логика бота)
+  max_client.py             — HTTP-клиент MAX API
+  forwarding.py             — пересылка запросов менеджерам
+  inn_parser.py             — парсинг ИНН и договоров
+  klo_rotation.py           — ротация КЛО по спецдням
+  logger.py                 — логирование
+  sheets_base.py            — общая авторизация Google Sheets
+  sheets_states.py          — состояния пользователей
+  sheets_clients.py         — клиенты + менеджеры
+  sheets_phones.py          — телефоны
+  sheets_messages.py        — message_map (ответы менеджеров)
+  sheets_logs.py            — логи в таблицу
+  google_sheets_cart.py     — корзина упаковки
+  nodes/packaging_paid.py   — каталог товаров + логика корзины
+  state.py                  — in-memory корзина (fallback)
+```

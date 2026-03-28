@@ -1,58 +1,19 @@
-﻿import json
-import os
+"""Работа с корзиной упаковки в Google Sheets (Лист2)."""
 
 from app import settings
+from app.sheets_base import open_sheet
 
-import gspread
-from google.oauth2.service_account import Credentials
-
-_SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
-
-_client = None
 _sheet = None
 
 
-def _load_creds():
-    raw = os.getenv("GOOGLE_SA_JSON")
-    path = os.getenv("GOOGLE_SA_JSON_PATH") or settings.DEFAULT_SA_PATH
-
-    if raw:
-        info = json.loads(raw)
-    elif path:
-        with open(path, "r", encoding="utf-8-sig") as f:
-            info = json.load(f)
-    else:
-        raise RuntimeError("GOOGLE_SA_JSON or GOOGLE_SA_JSON_PATH is not set")
-
-    return Credentials.from_service_account_info(info, scopes=_SCOPES)
-
-
 def _get_cart_sheet():
-    global _client, _sheet
-    if _sheet is not None:
-        return _sheet
-
-    sheet_id = os.getenv("GSHEET_CART_ID") or settings.GSHEET_CART_ID
-    gid = os.getenv("GSHEET_CART_GID") or settings.GSHEET_CART_GID
-    tab = os.getenv("GSHEET_CART_TAB") or settings.GSHEET_CART_TAB
-
-    if not sheet_id:
-        raise RuntimeError("GSHEET_CART_ID is not set")
-
-    creds = _load_creds()
-    _client = gspread.authorize(creds)
-    sh = _client.open_by_key(sheet_id)
-
-    if gid:
-        _sheet = sh.get_worksheet_by_id(int(gid))
-    elif tab:
-        _sheet = sh.worksheet(tab)
-    else:
-        _sheet = sh.sheet1
-
+    global _sheet
+    if _sheet is None:
+        _sheet = open_sheet(
+            settings.GSHEET_CART_ID,
+            tab=settings.GSHEET_CART_TAB,
+            gid=settings.GSHEET_CART_GID,
+        )
     return _sheet
 
 
@@ -113,7 +74,6 @@ def delete_cart_rows(user_id: int):
     except ValueError:
         return
 
-    # Collect row numbers (1-based in Sheets) to delete
     to_delete = []
     for i, row in enumerate(rows, start=2):
         if len(row) > i_user and str(row[i_user]) == str(user_id):
@@ -121,6 +81,3 @@ def delete_cart_rows(user_id: int):
 
     for row_idx in sorted(to_delete, reverse=True):
         sheet.delete_rows(row_idx)
-
-
-
