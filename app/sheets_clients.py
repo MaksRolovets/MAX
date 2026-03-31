@@ -25,6 +25,18 @@ def _get_managers_sheet():
     return _managers_sheet
 
 
+def _find_idx(header: list, names: list[str]) -> int | None:
+    names_l = [n.lower() for n in names]
+    for i, h in enumerate(header):
+        h_str = str(h).strip().lower()
+        if not h_str:
+            continue
+        for n in names_l:
+            if n in h_str:
+                return i
+    return None
+
+
 def find_client_by_inn(inn: str) -> dict | None:
     """Ищет клиента по ИНН в таблице клиентов."""
     sheet = _get_clients_sheet()
@@ -34,17 +46,11 @@ def find_client_by_inn(inn: str) -> dict | None:
 
     header = values[0]
 
-    def idx(name: str):
-        for i, h in enumerate(header):
-            if name.lower() in h.lower():
-                return i
-        return None
-
-    i_name = idx("Наименование")
-    i_inn = idx("ИНН")
-    i_contract = idx("Номер договора")
-    i_status = idx("Статус")
-    i_manager = idx("Менеджер")
+    i_name = _find_idx(header, ["наименование", "название"])
+    i_inn = _find_idx(header, ["инн"])
+    i_contract = _find_idx(header, ["номер договора", "номер договор", "договор"])
+    i_status = _find_idx(header, ["статус договора", "статус"])
+    i_manager = _find_idx(header, ["менеджер продаж", "менеджер"])
 
     for row in values[1:]:
         row_inn = row[i_inn] if i_inn is not None and len(row) > i_inn else ""
@@ -68,17 +74,11 @@ def find_client_by_contract(contract: str) -> dict | None:
 
     header = values[0]
 
-    def idx(name: str):
-        for i, h in enumerate(header):
-            if name.lower() in h.lower():
-                return i
-        return None
-
-    i_name = idx("Наименование")
-    i_inn = idx("ИНН")
-    i_contract = idx("Номер договора")
-    i_status = idx("Статус")
-    i_manager = idx("Менеджер")
+    i_name = _find_idx(header, ["наименование", "название"])
+    i_inn = _find_idx(header, ["инн"])
+    i_contract = _find_idx(header, ["номер договора", "номер договор", "договор"])
+    i_status = _find_idx(header, ["статус договора", "статус"])
+    i_manager = _find_idx(header, ["менеджер продаж", "менеджер"])
 
     contract_lower = contract.strip().lower()
     for row in values[1:]:
@@ -105,14 +105,8 @@ def find_manager_id(manager_name: str) -> int | None:
 
     header = values[0]
 
-    def idx(name: str):
-        for i, h in enumerate(header):
-            if name.lower() in h.lower():
-                return i
-        return None
-
-    i_name = idx("manager_name")
-    i_id = idx("telegram_id")  # в MAX это будет max_user_id
+    i_name = _find_idx(header, ["manager_name", "менеджер"])
+    i_id = _find_idx(header, ["telegram_id", "max id", "id max", "id макс", "max_id", "макс"])
 
     name_lower = manager_name.strip().lower()
     for row in values[1:]:
@@ -120,70 +114,48 @@ def find_manager_id(manager_name: str) -> int | None:
         if row_name.strip().lower() == name_lower:
             raw = row[i_id] if i_id is not None and len(row) > i_id else ""
             try:
-                return int(float(raw))
-            except (ValueError, TypeError):
+                return int(float(raw)) if str(raw).strip() else None
+            except Exception:
                 return None
     return None
 
 
-def update_manager_for_clients(old_manager: str, new_manager: str) -> int:
-    """Массово обновляет менеджера у всех клиентов. Возвращает кол-во обновлённых."""
-    sheet = _get_clients_sheet()
-    values = sheet.get_all_values()
-    if not values:
-        return 0
-
-    header = values[0]
-
-    def idx(name: str):
-        for i, h in enumerate(header):
-            if name.lower() in h.lower():
-                return i
-        return None
-
-    i_manager = idx("Менеджер")
-    if i_manager is None:
-        return 0
-
-    count = 0
-    old_lower = old_manager.strip().lower()
-    for row_idx, row in enumerate(values[1:], start=2):
-        if len(row) > i_manager and row[i_manager].strip().lower() == old_lower:
-            sheet.update_cell(row_idx, i_manager + 1, new_manager)
-            count += 1
-    return count
-
-
 def update_manager_id(manager_name: str, new_id: str):
-    """Обновляет ID менеджера в таблице менеджеров."""
+    """Обновляет ID менеджера в таблице managers."""
     sheet = _get_managers_sheet()
     values = sheet.get_all_values()
     if not values:
         return
 
     header = values[0]
+    i_name = _find_idx(header, ["manager_name", "менеджер"])
+    i_id = _find_idx(header, ["telegram_id", "max id", "id max", "id макс", "max_id", "макс"])
+    if i_name is None or i_id is None:
+        return
 
-    def idx(name: str):
-        for i, h in enumerate(header):
-            if name.lower() in h.lower():
-                return i
-        return None
-
-    i_name = idx("manager_name")
-    i_id = idx("telegram_id")
-
-    name_lower = manager_name.strip().lower()
-    for row_idx, row in enumerate(values[1:], start=2):
-        row_name = row[i_name] if i_name is not None and len(row) > i_name else ""
-        if row_name.strip().lower() == name_lower:
-            if i_id is not None:
-                sheet.update_cell(row_idx, i_id + 1, new_id)
+    for idx, row in enumerate(values[1:], start=2):
+        row_name = row[i_name] if len(row) > i_name else ""
+        if row_name.strip().lower() == manager_name.strip().lower():
+            sheet.update_cell(idx, i_id + 1, str(new_id))
             return
 
-    # Менеджер не найден — добавляем
-    new_row = [""] * len(header)
-    if i_name is not None:
-        new_row[i_name] = manager_name
-    if i_id is not None:
-        new_row[i_id] = new_id
-    sheet.append_row(new_row, value_input_option="RAW")
+
+def update_manager_for_clients(old_name: str, new_name: str) -> int:
+    """Массово меняет менеджера у клиентов (по имени), возвращает кол-во обновлений."""
+    sheet = _get_clients_sheet()
+    values = sheet.get_all_values()
+    if not values:
+        return 0
+
+    header = values[0]
+    i_manager = _find_idx(header, ["менеджер продаж", "менеджер"])
+    if i_manager is None:
+        return 0
+
+    updated = 0
+    for idx, row in enumerate(values[1:], start=2):
+        row_manager = row[i_manager] if len(row) > i_manager else ""
+        if row_manager.strip().lower() == old_name.strip().lower():
+            sheet.update_cell(idx, i_manager + 1, new_name)
+            updated += 1
+    return updated

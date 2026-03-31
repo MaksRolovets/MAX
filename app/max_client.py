@@ -1,7 +1,14 @@
-import os
+﻿import os
 import requests
 
+from dotenv import load_dotenv
+
 from app.logger import log_event
+
+# Load .env from repo root if present (so MAX_BOT_TOKEN is available).
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DOTENV_PATH = os.getenv('DOTENV_PATH') or os.path.join(_BASE_DIR, '.env')
+load_dotenv(_DOTENV_PATH, override=True)
 
 API_BASE = os.getenv("MAX_API_BASE", "https://platform-api.max.ru")
 
@@ -53,3 +60,6 @@ def get_updates(params: dict, trace_id: str | None = None):
     )
     log_event("http_response", trace_id, status=resp.status_code, body=resp.text[:500])
     return resp
+
+
+

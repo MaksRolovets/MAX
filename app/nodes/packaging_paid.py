@@ -1,4 +1,4 @@
-﻿from app.settings import USE_CART_SHEETS
+from app.settings import USE_CART_SHEETS
 from app.state import CART
 
 USE_SHEETS_CART = USE_CART_SHEETS
@@ -122,6 +122,10 @@ def _find_item(item_id: str):
 def categories_menu():
     rows = []
     categories = sorted(CATALOG.keys(), key=str.casefold)
+
+    rows.append([btn_cb("📦 Заказ коробок", "packaging_order_boxes")])
+    rows.append([btn_cb("🛍️ Заказ пакетов", "packaging_order_packages")])
+    rows.append([btn_cb("📧 Заказ конвертов", "packaging_order_envelopes")])
 
     for i in range(0, len(categories), 2):
         row = [btn_cb(f"📦 {categories[i]}", f"cat_{categories[i]}")]
