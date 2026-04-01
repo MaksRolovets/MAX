@@ -1,7 +1,15 @@
 import json
 import os
+import sys
 import time
 import uuid
+
+# Fix Windows console encoding for emoji/unicode
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 LOG_PATH = os.getenv("MAX_LOG_PATH", os.path.join(
     os.getenv("MAX_BASE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -39,7 +47,10 @@ def log_event(event: str, trace_id: str | None = None, **data) -> None:
         f.write(line + "\n")
 
     if LOG_TO_STDOUT:
-        print(line, flush=True)
+        try:
+            print(line, flush=True)
+        except UnicodeEncodeError:
+            print(line.encode("ascii", errors="replace").decode("ascii"), flush=True)
 
     if LOG_TO_SHEETS:
         try:
