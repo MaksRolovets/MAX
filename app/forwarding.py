@@ -103,19 +103,16 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
     if manager_max_id:
         resp = send_message(manager_max_id, payload, trace_id)
         # Сохраняем связку для ответа менеджера
+        msg_id = ""
         try:
-            resp_data = resp.json()
-            msg_id = resp_data.get("message", {}).get("body", {}).get("mid", "")
-            if msg_id:
-                save_message_map(str(msg_id), user_id)
-        except Exception:
+            data = resp.json() if hasattr(resp, "json") else resp
+            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
+                     data.get("message", {}).get("mid") or \
+                     data.get("mid") or data.get("id") or ""
+        except:
             pass
-        log_event("forwarded_to_manager", trace_id, manager_id=manager_max_id, user_id=user_id)
-    else:
-        # Менеджер не найден — шлём в общий чат
-        if settings.GENERAL_CHAT_ID:
-            send_message(settings.GENERAL_CHAT_ID, payload, trace_id)
-            log_event("forwarded_to_general", trace_id, user_id=user_id)
+        if msg_id:
+            save_message_map(str(msg_id), user_id)
 
     # Логируем
     try:
@@ -139,13 +136,16 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
     klo_id = get_klo_user_id()
     if klo_id:
         resp = send_message(klo_id, payload, trace_id)
+        msg_id = ""
         try:
-            resp_data = resp.json()
-            msg_id = resp_data.get("message", {}).get("body", {}).get("mid", "")
-            if msg_id:
-                save_message_map(str(msg_id), user_id)
-        except Exception:
+            data = resp.json() if hasattr(resp, "json") else resp
+            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
+                     data.get("message", {}).get("mid") or \
+                     data.get("mid") or data.get("id") or ""
+        except:
             pass
+        if msg_id:
+            save_message_map(str(msg_id), user_id)
     log_event("forwarded_to_klo", trace_id, klo_id=klo_id, user_id=user_id)
 
     try:
@@ -169,13 +169,16 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
     for acc_id in (settings.ACCOUNTANT_USER_ID, settings.ACCOUNTANT2_USER_ID):
         if acc_id:
             resp = send_message(acc_id, payload, trace_id)
-            try:
-                resp_data = resp.json()
-                msg_id = resp_data.get("message", {}).get("body", {}).get("mid", "")
-                if msg_id:
-                    save_message_map(str(msg_id), user_id)
-            except Exception:
-                pass
+            msg_id = ""
+        try:
+            data = resp.json() if hasattr(resp, "json") else resp
+            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
+                     data.get("message", {}).get("mid") or \
+                     data.get("mid") or data.get("id") or ""
+        except:
+            pass
+        if msg_id:
+            save_message_map(str(msg_id), user_id)
     log_event("forwarded_to_accountant", trace_id, user_id=user_id)
 
 
@@ -193,13 +196,16 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
 
     if settings.SALES_USER_ID:
         resp = send_message(settings.SALES_USER_ID, payload, trace_id)
+        msg_id = ""
         try:
-            resp_data = resp.json()
-            msg_id = resp_data.get("message", {}).get("body", {}).get("mid", "")
-            if msg_id:
-                save_message_map(str(msg_id), user_id)
-        except Exception:
+            data = resp.json() if hasattr(resp, "json") else resp
+            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
+                     data.get("message", {}).get("mid") or \
+                     data.get("mid") or data.get("id") or ""
+        except:
             pass
+        if msg_id:
+            save_message_map(str(msg_id), user_id)
     log_event("forwarded_to_sales", trace_id, user_id=user_id)
 
 
