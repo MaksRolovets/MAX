@@ -44,6 +44,11 @@ SALES_USER_ID = int(os.getenv("SALES_USER_ID") or "0")            # Продаж
 GENERAL_CHAT_ID = int(os.getenv("GENERAL_CHAT_ID") or "0")        # Общий чат (если менеджер не найден)
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID") or "0")            # Администратор
 
+# ── OpenRouter AI ─────────────────────────────────────────────────
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
 # ── Флаги ─────────────────────────────────────────────────────────
 _use_cart = os.getenv("USE_CART_SHEETS", "1")
 USE_CART_SHEETS = _use_cart == "1"

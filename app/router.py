@@ -13,6 +13,7 @@ from app.forwarding import (
 from app.sheets_clients import (
     update_manager_for_clients, update_manager_id,
 )
+from app.ai_client import ask_ai, parse_state_command, clear_conversation
 
 # ─── Текстовые константы промптов ────────────────────────────────
 
@@ -360,6 +361,7 @@ def _handle_callback(update: dict, trace_id: str):
 
     # 1) Главное меню
     if payload in ("main_menu", "menu"):
+        clear_conversation(user_id)
         text, rows = _main_menu()
         _answer(callback_id, text, rows, trace_id)
         return
@@ -589,9 +591,24 @@ def _handle_text_message(update: dict, trace_id: str):
             _confirm_to_client(user_id, trace_id)
             return
 
-    # Нет состояния и не команда → показываем главное меню
-    t, rows = _main_menu()
-    _send(user_id, t, rows, trace_id)
+    # Нет состояния и не команда → передаём AI
+    ai_response = ask_ai(user_id, text, trace_id)
+    if not ai_response:
+        # AI недоступен — показываем меню как fallback
+        t, rows = _main_menu()
+        _send(user_id, t, rows, trace_id)
+        return
+
+    clean_text, ai_state, ai_topic = parse_state_command(ai_response)
+
+    if ai_state and ai_topic:
+        # AI решил передать запрос сотруднику — ставим state
+        set_state(user_id, ai_state, topic=ai_topic)
+        _send(user_id, clean_text, trace_id=trace_id)
+    else:
+        # Обычный ответ AI — отправляем с кнопкой меню
+        rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
+        _send(user_id, clean_text, rows, trace_id)
 
 
 # ─── Главная точка входа ──────────────────────────────────────────
