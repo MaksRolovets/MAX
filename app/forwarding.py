@@ -47,6 +47,22 @@ TOPIC_LABELS = {
 }
 
 
+def _parse_response(resp):
+    """Извлекает msg_id и chat_id из ответа MAX API."""
+    msg_id = ""
+    chat_id = ""
+    try:
+        data = resp.json() if hasattr(resp, "json") else resp
+        msg = data.get("message", {})
+        msg_id = msg.get("body", {}).get("mid") or \
+                 msg.get("mid") or \
+                 data.get("mid") or data.get("id") or ""
+        chat_id = msg.get("recipient", {}).get("chat_id", "")
+    except:
+        pass
+    return msg_id, chat_id
+
+
 def _format_manager_message(user_id: int, user_name: str, topic: str,
                             text: str, phone: str | None) -> str:
     """Форматирует сообщение для менеджера."""
@@ -103,16 +119,10 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
     if manager_max_id:
         resp = send_message(manager_max_id, payload, trace_id)
         # Сохраняем связку для ответа менеджера
-        msg_id = ""
-        try:
-            data = resp.json() if hasattr(resp, "json") else resp
-            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
-                     data.get("message", {}).get("mid") or \
-                     data.get("mid") or data.get("id") or ""
-        except:
-            pass
+        msg_id, manager_chat_id = _parse_response(resp)
         if msg_id:
-            save_message_map(str(msg_id), user_id)
+            save_message_map(str(msg_id), user_id,
+                             manager_chat_id=str(manager_chat_id))
 
     # Логируем
     try:
@@ -136,16 +146,10 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
     klo_id = get_klo_user_id()
     if klo_id:
         resp = send_message(klo_id, payload, trace_id)
-        msg_id = ""
-        try:
-            data = resp.json() if hasattr(resp, "json") else resp
-            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
-                     data.get("message", {}).get("mid") or \
-                     data.get("mid") or data.get("id") or ""
-        except:
-            pass
+        msg_id, klo_chat_id = _parse_response(resp)
         if msg_id:
-            save_message_map(str(msg_id), user_id)
+            save_message_map(str(msg_id), user_id,
+                             manager_chat_id=str(klo_chat_id))
     log_event("forwarded_to_klo", trace_id, klo_id=klo_id, user_id=user_id)
 
     try:
@@ -169,16 +173,10 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
     for acc_id in (settings.ACCOUNTANT_USER_ID, settings.ACCOUNTANT2_USER_ID):
         if acc_id:
             resp = send_message(acc_id, payload, trace_id)
-            msg_id = ""
-        try:
-            data = resp.json() if hasattr(resp, "json") else resp
-            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
-                     data.get("message", {}).get("mid") or \
-                     data.get("mid") or data.get("id") or ""
-        except:
-            pass
-        if msg_id:
-            save_message_map(str(msg_id), user_id)
+            msg_id, acc_chat_id = _parse_response(resp)
+            if msg_id:
+                save_message_map(str(msg_id), user_id,
+                                 manager_chat_id=str(acc_chat_id))
     log_event("forwarded_to_accountant", trace_id, user_id=user_id)
 
 
@@ -196,16 +194,10 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
 
     if settings.SALES_USER_ID:
         resp = send_message(settings.SALES_USER_ID, payload, trace_id)
-        msg_id = ""
-        try:
-            data = resp.json() if hasattr(resp, "json") else resp
-            msg_id = data.get("message", {}).get("body", {}).get("mid") or \
-                     data.get("message", {}).get("mid") or \
-                     data.get("mid") or data.get("id") or ""
-        except:
-            pass
+        msg_id, sales_chat_id = _parse_response(resp)
         if msg_id:
-            save_message_map(str(msg_id), user_id)
+            save_message_map(str(msg_id), user_id,
+                             manager_chat_id=str(sales_chat_id))
     log_event("forwarded_to_sales", trace_id, user_id=user_id)
 
 
