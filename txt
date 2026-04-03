@@ -1,0 +1,31 @@
+MAX_BOT_TOKEN=f9LHodD0cOLgf_0buCip0sDbatL0euGdP2f6NBNbTBx8tBc9_bXK8r5jVOKt06lDVrVCK6IIRBf_LWwnHbjh
+MAX_API_BASE=https://platform-api.max.ru
+
+# Google Sheets Р В Р’В°Р В Р вЂ Р РЋРІР‚С™Р В РЎвЂўР РЋР вЂљР В РЎвЂР В Р’В·Р В Р’В°Р РЋРІР‚В Р В РЎвЂР РЋР РЏ
+GOOGLE_SA_JSON_PATH=./secrets/google_sa.json
+# GOOGLE_SA_JSON={"type":"service_account",...}
+
+# Google Sheets ID Р РЋРІР‚С™Р В Р’В°Р В Р’В±Р В Р’В»Р В РЎвЂР РЋРІР‚В 
+GSHEET_STATES_ID=1TeWu2SwExHkkSoneXV4plXS-CYDosUVqZyYw28hidMw
+GSHEET_MANAGERS_ID=11baGZbLI9cvg0_Pk5jevv2ZzAzfOkrrOPPGdjjpr3YU
+GSHEET_CLIENTS_ID=179PFcQltERRmQDM4Yl8NPAqOi6xJXNuaRidU5TJ2IkE
+GSHEET_PHONES_ID=0
+GSHEET_LOGS_ID=1HzjbS-CXQIy0u2Rdw745EFzNakWvhCOK1CX4k3PDyto
+GSHEET_MSGMAP_ID=1LxbLylCL1HBvLvrb9-SNCbZ3RLmjLXFr8hPGWGU5imA
+GSHEET_CART_ID=1lN1TtjXnpJJhP-SEfETWK-nPumFKoLHNpllLWkuUSkI
+GSHEET_CART_GID=132342150
+
+# Р В РЎСџР В РЎвЂўР В Р’В»Р РЋРЎвЂњР РЋРІР‚РЋР В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р В РЎвЂ (MAX user_id)
+KLO_USER_ID=235825655
+KLO_USER_ID_ROTATION=0
+ACCOUNTANT_USER_ID=0
+ACCOUNTANT2_USER_ID=0
+SALES_USER_ID=0
+GENERAL_CHAT_ID=0
+ADMIN_USER_ID=238937435
+
+# Р В РЎСџР РЋР вЂљР В РЎвЂўР РЋРІР‚РЋР В Р’ВµР В Р’Вµ
+USE_CART_SHEETS=1
+LOG_TO_STDOUT=1
+LOG_TO_SHEETS=0
+# KLO_SPECIAL_DAYS=01-15,02-20,03-10
