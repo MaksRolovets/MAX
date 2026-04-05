@@ -18,23 +18,25 @@ from app.ai_client import ask_ai, parse_state_command, clear_conversation
 # ─── Текстовые константы промптов ────────────────────────────────
 
 TEXT_REQUEST_UNIVERSAL = "📝 Пожалуйста, напишите данные одним сообщением.\nМы передадим ваш запрос менеджеру."
+TEXT_TRACKING_NO = "📝 Напишите номер договора или ИНН одним сообщением.\nВаш запрос будет передан менеджеру и с вами скоро свяжутся!"
 TEXT_CALLBACK_REQUEST = "📞 **Обратный звонок**\n\nУкажите ИНН/договор и ваш вопрос одним сообщением."
 TEXT_FEEDBACK = "⭐ **Оставить отзыв**\n\nУкажите договор/ИНН и ваш отзыв одним сообщением."
 TEXT_CONTRACT_RENEWAL = "📝 **Перезаключить договор**\n\nУкажите договор/ИНН и контакты одним сообщением."
 TEXT_NEW_SERVICES = "✨ **Подключить услуги**\n\nУкажите договор/ИНН, нужные услуги и контакты одним сообщением."
-TEXT_FREE_BOX = "📝 Укажите ИНН/договор и контакт одним сообщением."
+TEXT_FREE_BOX = "🆓 **Бесплатная упаковка**\n\nУкажите номер договора или ИНН, а также почту или мобильный телефон одним сообщением.\nМы передадим запрос менеджеру."
 TEXT_ORDER_BOXES = "📝 Укажите ИНН/договор и количество коробок одним сообщением."
 TEXT_ORDER_PACKAGES = "📝 Укажите ИНН/договор и количество пакетов одним сообщением."
 TEXT_ORDER_ENVELOPES = "📝 Укажите ИНН/договор и количество конвертов одним сообщением."
-TEXT_REQUEST_ORDER_NUMBER = "📝 Укажите номер заказа одним сообщением."
-TEXT_REQUEST_KLO = "📝 Укажите ИНН или номер договора одним сообщением."
+TEXT_REQUEST_ORDER_AND_INN = "📝 Укажите номер заказа, а также ИНН или номер договора одним сообщением.\nВаш запрос будет передан менеджеру и с вами скоро свяжутся!"
+TEXT_REQUEST_KLO = "📝 Напишите ваш номер договора или ИНН, а также комментарий — какая точно помощь вам нужна?\nМы передадим запрос менеджеру."
+TEXT_ORDER_OTHER = "❓ **Другой вопрос по заказу**\n\n🔢 Пожалуйста, укажите номер заказа и опишите ваш вопрос подробно одним сообщением.\nМы передадим запрос в отдел по работе с клиентами."
+TEXT_INTERNATIONAL = "🌍 **ЕАЭС или международная отправка**\n\nУкажите номер вашего договора или ИНН, а также телефон.\nДополнительно в комментарии просим указать маршрут, краткие параметры и тип груза.\nМы передадим запрос менеджеру."
 TEXT_FINANCE_INVOICE = "💳 **Получить счет**\n\nУкажите ИНН/договор и контактный телефон одним сообщением."
 TEXT_FINANCE_QUESTION = "❓ **Вопрос по счету**\n\nУкажите номер счета, телефон и опишите вопрос одним сообщением."
-TEXT_FINANCE_PERIOD = "📝 Укажите период, ИНН/договор одним сообщением."
+TEXT_FINANCE_PERIOD = "📄 **Акт сверки**\n\nУкажите период (ДД.ММ.ГГГГ — ДД.ММ.ГГГГ), ваш ИНН или номер договора одним сообщением.\nМы передадим ваш запрос менеджеру."
 TEXT_CONTRACT = "📄 **Заключить договор**\n\nУкажите название организации, ИНН, сайт и телефон одним сообщением."
 TEXT_HELP_MANAGER = "📝 Укажите ИНН или номер договора одним сообщением."
 TEXT_REMEM_GMAIL = "📝 Укажите ИНН или номер договора одним сообщением."
-TEXT_RESTORE_HELP = "📝 Укажите ИНН или номер договора одним сообщением."
 
 
 # ─── Утилиты ──────────────────────────────────────────────────────
@@ -112,9 +114,9 @@ def _create_order_menu():
 def _create_order_rf():
     text = (
         "🇷🇺 **Заказ по РФ**\n\n"
-        "Самостоятельно создайте заказ в личном кабинете:\n"
+        "Самостоятельно за несколько минут создайте заказ в личном кабинете:\n"
         "https://lk.cdek.ru/user/login\n\n"
-        "Или укажите номер договора/ИНН и мы передадим запрос в отдел работы с клиентами."
+        "Или укажите ваш номер договора или ИНН и мы передадим запрос в отдел работы с клиентами."
     )
     rows = [
         [packaging_paid.btn_cb("📝 Указать договор/ИНН", "request_klo")],
@@ -126,7 +128,9 @@ def _create_order_rf():
 def _create_order_international():
     text = (
         "🌍 **ЕАЭС или международная отправка**\n\n"
-        "Укажите номер договора/ИНН, телефон и комментарий."
+        "Укажите номер вашего договора или ИНН, а также телефон.\n"
+        "Дополнительно в комментарии просим указать маршрут, краткие параметры и тип груза.\n"
+        "Мы передадим запрос менеджеру."
     )
     rows = [
         [packaging_paid.btn_cb("📝 Указать данные + комментарий", "need_help_with_contact")],
@@ -166,9 +170,11 @@ def _order_date():
     text = (
         "📅 Назначить дату доставки можно в личном кабинете:\n"
         "https://lk.cdek.ru/user/login\n\n"
-        "Если нужна помощь — нажмите кнопку ниже."
+        "Если нужна помощь — нажмите кнопку ниже.\n\n"
+        "❓ **Вопрос решен?**"
     )
     rows = [
+        [packaging_paid.btn_cb("✅ Да, решен", "tracking_solved_yes")],
         [packaging_paid.btn_cb("✅ Нужна помощь", "need_help_cheking")],
         [packaging_paid.btn_cb("◀️ В главное меню", "main_menu")],
     ]
@@ -177,10 +183,14 @@ def _order_date():
 
 def _order_edit():
     text = (
-        "✏️ Внести изменения можно в ЛК: https://lk.cdek.ru/user/login\n"
-        "Если заказ уже сдан, изменение даты невозможно — обратитесь к менеджеру."
+        "✏️ Внести изменения можно в ЛК: https://lk.cdek.ru/user/login\n\n"
+        "Войдите в личный кабинет и отредактируйте заказ в меню «Список заказов».\n"
+        "Если ваш заказ уже сдан на отправку, то корректировка даты доставки "
+        "в личном кабинете невозможна, и вам следует обратиться к менеджеру.\n\n"
+        "❓ **Вопрос решен?**"
     )
     rows = [
+        [packaging_paid.btn_cb("✅ Да, решен", "tracking_solved_yes")],
         [packaging_paid.btn_cb("✅ Нужна помощь", "need_help")],
         [packaging_paid.btn_cb("◀️ В главное меню", "main_menu")],
     ]
@@ -266,7 +276,11 @@ def _packaging_menu():
 
 
 def _packaging_free():
-    text = "🆓 **Бесплатная упаковка**\n\nУкажите договор/ИНН и контакт."
+    text = (
+        "🆓 **Бесплатная упаковка**\n\n"
+        "Укажите номер договора или ИНН, а также почту или мобильный телефон "
+        "и мы передадим запрос менеджеру."
+    )
     rows = [
         [packaging_paid.btn_cb("📝 Указать данные", "free_pckaiging_data")],
         [packaging_paid.btn_cb("◀️ В главное меню", "main_menu")],
@@ -290,6 +304,7 @@ SIMPLE_CALLBACKS = {
 
     # ЛК
     "category_lk": _lk_menu,
+    "lk_restore": _lk_restore,
     "lk_training": _lk_training,
 
     # Финансы
@@ -307,13 +322,13 @@ SIMPLE_CALLBACKS = {
 # Формат: callback_data → (state, topic, prompt_text)
 STATE_CALLBACKS = {
     # → waiting_message (пересылка менеджеру через ИНН-поиск)
-    "need_help": ("waiting_message", "need_help", TEXT_REQUEST_UNIVERSAL),
-    "need_help_with_contact": ("waiting_message", "need_help_with_contact", TEXT_REQUEST_UNIVERSAL),
+    "need_help": ("waiting_message", "need_help", TEXT_REQUEST_ORDER_AND_INN),
+    "need_help_with_contact": ("waiting_message", "need_help_with_contact", TEXT_INTERNATIONAL),
     "callback_request": ("waiting_message", "callback_request", TEXT_CALLBACK_REQUEST),
     "feedback": ("waiting_message", "feedback", TEXT_FEEDBACK),
     "contract_renewal": ("waiting_message", "contract_renewal", TEXT_CONTRACT_RENEWAL),
     "new_services": ("waiting_message", "new_services", TEXT_NEW_SERVICES),
-    "tracking_solved_no": ("waiting_message", "tracking_solved_no", TEXT_REQUEST_UNIVERSAL),
+    "tracking_solved_no": ("waiting_message", "tracking_solved_no", TEXT_TRACKING_NO),
     "tracking_help_yes": ("waiting_message", "tracking_help_yes", TEXT_REQUEST_UNIVERSAL),
     "free_pckaiging_data": ("waiting_message", "free_pckaiging_data", TEXT_FREE_BOX),
     "packaging_order_boxes": ("waiting_message", "packaging_order_boxes", TEXT_ORDER_BOXES),
@@ -322,9 +337,9 @@ STATE_CALLBACKS = {
 
     # → waiting_klo (пересылка в КЛО)
     "request_klo": ("waiting_klo", "request_klo", TEXT_REQUEST_KLO),
-    "order_other": ("waiting_klo", "order_other", TEXT_REQUEST_ORDER_NUMBER),
-    "need_help_with_order": ("waiting_klo", "need_help_with_order", TEXT_REQUEST_ORDER_NUMBER),
-    "need_help_cheking": ("waiting_klo", "need_help_cheking", TEXT_REQUEST_ORDER_NUMBER),
+    "order_other": ("waiting_klo", "order_other", TEXT_ORDER_OTHER),
+    "need_help_with_order": ("waiting_klo", "need_help_with_order", TEXT_REQUEST_ORDER_AND_INN),
+    "need_help_cheking": ("waiting_klo", "need_help_cheking", TEXT_REQUEST_ORDER_AND_INN),
 
     # → waiting_buh (пересылка бухгалтеру)
     "finance_invoice": ("waiting_buh", "finance_invoice", TEXT_FINANCE_INVOICE),
@@ -335,7 +350,6 @@ STATE_CALLBACKS = {
     "contract": ("waiting_pro", "contract", TEXT_CONTRACT),
     "need_help_manager": ("waiting_pro", "need_help_manager", TEXT_HELP_MANAGER),
     "remem_gmail": ("waiting_pro", "remem_gmail", TEXT_REMEM_GMAIL),
-    "lk_restore": ("waiting_pro", "lk_restore", TEXT_RESTORE_HELP),
 }
 
 STATE_BACK_BUTTONS = {
@@ -376,7 +390,10 @@ def _handle_callback(update: dict, trace_id: str):
     if payload in STATE_CALLBACKS:
         state, topic, prompt_text = STATE_CALLBACKS[payload]
         if user_id:
-            set_state(user_id, state, topic=topic)
+            try:
+                set_state(user_id, state, topic=topic)
+            except Exception as e:
+                log_event("set_state_error", trace_id, error=str(e), payload=payload)
         back_text, back_payload = STATE_BACK_BUTTONS.get(payload, ("◀️ В главное меню", "main_menu"))
         rows = [[packaging_paid.btn_cb(back_text, back_payload)]]
         _answer(callback_id, prompt_text, rows, trace_id)
