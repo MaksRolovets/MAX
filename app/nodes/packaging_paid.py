@@ -1,5 +1,6 @@
 from app.settings import USE_CART_SHEETS
 from app.state import CART
+from app.logger import log_event
 
 USE_SHEETS_CART = USE_CART_SHEETS
 if USE_SHEETS_CART:
@@ -192,7 +193,14 @@ def add_to_cart(user_id: int, item_id: str, qty: int):
             entry = user_cart.get(item_id, {"name": item["name"], "price": item["price"], "qty": 0})
             entry["qty"] += qty
             user_cart[item_id] = entry
-    except Exception:
+    except Exception as e:
+        log_event(
+            "add_to_cart_error",
+            user_id=user_id,
+            item_id=item_id,
+            qty=qty,
+            error=str(e)[:300],
+        )
         return "❌ Не удалось добавить в корзину. Попробуйте позже.", [[btn_cb("◀️ В главное меню", "main_menu")]]
 
     text = f"✅ *{item['name']}* добавлен в корзину (количество: {qty})."

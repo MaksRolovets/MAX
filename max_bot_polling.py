@@ -18,6 +18,7 @@ def poll_updates():
             "MAX_UPDATE_TYPES",
             "message_created,message_callback,message_command",
         )
+        log_event("max_update_types_selected", trace_id=trace_id, update_types=update_types)
         params = {
             "limit": 100,
             "timeout": 30,

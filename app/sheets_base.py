@@ -7,6 +7,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from app import settings
+from app.logger import log_event
 
 _SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -19,6 +20,14 @@ _gc = None
 def _load_creds() -> Credentials:
     raw = os.getenv("GOOGLE_SA_JSON")
     path = os.getenv("GOOGLE_SA_JSON_PATH") or settings.DEFAULT_SA_PATH
+
+    # Логируем только факт/путь, без содержимого ключа.
+    log_event(
+        "google_creds_resolved",
+        path=path,
+        has_env=bool(raw),
+        file_exists=os.path.exists(path) if path else False,
+    )
 
     if raw:
         info = json.loads(raw)
