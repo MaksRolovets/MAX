@@ -55,6 +55,19 @@ USE_CART_SHEETS = _use_cart == "1"
 
 MAX_UPDATE_TYPES = os.getenv("MAX_UPDATE_TYPES") or "message_created,message_callback,message_command"
 
+# Памятка ЛК: файл с диска, по умолчанию всегда `<корень репозитория>/assets/lk_memo.pdf`
+# (не зависит от MAX_BASE_DIR). В .env не задавайте ссылку http(s) — такие значения игнорируются.
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_APP_DIR)
+LK_MEMO_PDF_DEFAULT = os.path.normpath(os.path.join(_REPO_ROOT, "assets", "lk_memo.pdf"))
+_lk_env = (os.getenv("LK_MEMO_PDF_PATH") or "").strip()
+if _lk_env and not _lk_env.lower().startswith(("http://", "https://", "ftp://")):
+    LK_MEMO_PDF_PATH = os.path.normpath(
+        _lk_env if os.path.isabs(_lk_env) else os.path.join(_REPO_ROOT, _lk_env)
+    )
+else:
+    LK_MEMO_PDF_PATH = LK_MEMO_PDF_DEFAULT
+
 # ── Специальные дни ротации КЛО (МСК даты в формате MM-DD) ───────
 # Заполни реальными датами из n8n
 KLO_SPECIAL_DAYS = os.getenv("KLO_SPECIAL_DAYS", "").split(",") if os.getenv("KLO_SPECIAL_DAYS") else []

@@ -37,7 +37,7 @@ TOPIC_LABELS = {
     "need_help_with_contact": "Помощь (контакт)",
     "need_help_with_period": "Помощь (период)",
     "need_help_with_order": "Помощь (заказ)",
-    "need_help_cheking": "Помощь (проверка)",
+    "need_help_cheking": "Дата доставки — помощь",
     "need_help_manager": "Помощь менеджера",
     "tracking_solved_no": "Трекинг не решён",
     "tracking_help_yes": "Помощь с трекингом",
