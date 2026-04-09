@@ -90,6 +90,7 @@ def _main_menu():
         [packaging_paid.btn_cb("📝 Перезаключить договор", "contract_renewal")],
         [packaging_paid.btn_cb("📄 Заключить договор", "contract")],
         [packaging_paid.btn_cb("⭐ Оставить отзыв", "feedback")],
+        [packaging_paid.btn_cb("🤖 Помощь виртуального помощника", "start_ai")],
     ]
     return text, rows
 
@@ -403,6 +404,40 @@ def _handle_callback(update: dict, trace_id: str):
     if payload in ("main_menu", "menu"):
         if user_id is not None:
             clear_conversation(user_id)
+            try:
+                clear_state(user_id)
+            except Exception:
+                pass
+        text, rows = _main_menu()
+        _answer(callback_id, text, rows, trace_id)
+        return
+
+    # 1.1) Включить режим AI-помощника
+    if payload == "start_ai":
+        if user_id is not None:
+            try:
+                set_state(user_id, "ai_mode", topic="ai_assistant")
+            except Exception as e:
+                log_event("set_state_error", trace_id, error=str(e), payload=payload)
+            clear_conversation(user_id)
+        text = (
+            "🤖 **Виртуальный помощник**\n\n"
+            "Здравствуйте! Я виртуальный помощник компании СДЭК.\n"
+            "Задайте ваш вопрос, и я постараюсь помочь.\n\n"
+            "Чтобы завершить разговор, нажмите кнопку ниже."
+        )
+        rows = [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]]
+        _answer(callback_id, text, rows, trace_id)
+        return
+
+    # 1.2) Выключить режим AI-помощника
+    if payload == "stop_ai":
+        if user_id is not None:
+            clear_conversation(user_id)
+            try:
+                clear_state(user_id)
+            except Exception:
+                pass
         text, rows = _main_menu()
         _answer(callback_id, text, rows, trace_id)
         return
@@ -652,6 +687,27 @@ def _handle_text_message(update: dict, trace_id: str):
                   trace_id=trace_id)
             return
 
+        # ── Режим AI-помощника ──
+        if state == "ai_mode":
+            ai_response = ask_ai(user_id, text, trace_id)
+            if not ai_response:
+                _send(user_id, "Извините, помощник временно недоступен. Попробуйте позже.",
+                      [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]],
+                      trace_id)
+                return
+
+            clean_text, ai_state, ai_topic = parse_state_command(ai_response)
+
+            if ai_state and ai_topic:
+                # AI решил передать запрос сотруднику — выходим из ai_mode
+                set_state(user_id, ai_state, topic=ai_topic)
+                _send(user_id, clean_text, trace_id=trace_id)
+            else:
+                # Обычный ответ AI — кнопка завершения всегда внизу
+                rows = [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]]
+                _send(user_id, clean_text, rows, trace_id)
+            return
+
         # ── Обычные состояния: пересылка ──
         clear_state(user_id)
 
@@ -685,24 +741,9 @@ def _handle_text_message(update: dict, trace_id: str):
             _confirm_to_client(user_id, trace_id, topic=topic)
             return
 
-    # Нет состояния и не команда → передаём AI
-    ai_response = ask_ai(user_id, text, trace_id)
-    if not ai_response:
-        # AI недоступен — показываем меню как fallback
-        t, rows = _main_menu()
-        _send(user_id, t, rows, trace_id)
-        return
-
-    clean_text, ai_state, ai_topic = parse_state_command(ai_response)
-
-    if ai_state and ai_topic:
-        # AI решил передать запрос сотруднику — ставим state
-        set_state(user_id, ai_state, topic=ai_topic)
-        _send(user_id, clean_text, trace_id=trace_id)
-    else:
-        # Обычный ответ AI — отправляем с кнопкой меню
-        rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
-        _send(user_id, clean_text, rows, trace_id)
+    # Нет состояния и не команда → показываем главное меню
+    t, rows = _main_menu()
+    _send(user_id, t, rows, trace_id)
 
 
 # ─── Главная точка входа ──────────────────────────────────────────
