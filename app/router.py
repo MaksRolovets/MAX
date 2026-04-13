@@ -74,6 +74,20 @@ def _confirm_to_client(user_id: int, trace_id=None, topic: str | None = None):
     _send(user_id, text, rows, trace_id)
 
 
+def _confirm_and_maybe_return_ai(user_id: int, from_ai: bool, trace_id=None,
+                                  topic: str | None = None):
+    """Подтверждение + возврат в AI-режим, если клиент пришёл из ИИ-помощника."""
+    if from_ai:
+        # Возвращаем в AI-режим — ИИ сам спросит «чем ещё помочь?»
+        set_state(user_id, "ai_mode", topic="ai_assistant")
+        confirm = "✅ Ваш запрос принят! Менеджер свяжется с вами в ближайшее время."
+        ai_continue = "\n\nЧем ещё могу помочь? Если вопросов больше нет — нажмите кнопку ниже."
+        rows = [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]]
+        _send(user_id, confirm + ai_continue, rows, trace_id)
+    else:
+        _confirm_to_client(user_id, trace_id, topic)
+
+
 # ─── Меню ─────────────────────────────────────────────────────────
 
 
@@ -700,7 +714,8 @@ def _handle_text_message(update: dict, trace_id: str):
 
             if ai_state and ai_topic:
                 # AI решил передать запрос сотруднику — выходим из ai_mode
-                set_state(user_id, ai_state, topic=ai_topic)
+                # Помечаем comment="from_ai", чтобы после пересылки вернуть в ai_mode
+                set_state(user_id, ai_state, topic=ai_topic, comment="from_ai")
                 _send(user_id, clean_text, trace_id=trace_id)
             else:
                 # Обычный ответ AI — кнопка завершения всегда внизу
@@ -709,11 +724,12 @@ def _handle_text_message(update: dict, trace_id: str):
             return
 
         # ── Обычные состояния: пересылка ──
+        from_ai = prev_comment == "from_ai"
         clear_state(user_id)
 
         if state == "waiting_message":
             forward_to_manager(user_id, user_name, text, topic, trace_id)
-            _confirm_to_client(user_id, trace_id, topic=topic)
+            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic)
             return
 
         if state == "waiting_klo":
@@ -722,7 +738,7 @@ def _handle_text_message(update: dict, trace_id: str):
             if topic == "checkout" and prev_comment:
                 full_text = f"{prev_comment}\n\nИНН/Договор: {text}"
             forward_to_klo(user_id, user_name, full_text, topic, trace_id)
-            _confirm_to_client(user_id, trace_id, topic=topic)
+            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic)
             # Если это checkout — очищаем корзину
             if topic == "checkout":
                 try:
@@ -733,12 +749,12 @@ def _handle_text_message(update: dict, trace_id: str):
 
         if state == "waiting_buh":
             forward_to_accountant(user_id, user_name, text, topic, trace_id)
-            _confirm_to_client(user_id, trace_id, topic=topic)
+            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic)
             return
 
         if state == "waiting_pro":
             forward_to_sales(user_id, user_name, text, topic, trace_id)
-            _confirm_to_client(user_id, trace_id, topic=topic)
+            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic)
             return
 
     # Нет состояния и не команда → показываем главное меню
