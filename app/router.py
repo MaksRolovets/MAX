@@ -1,6 +1,7 @@
 """Главный маршрутизатор обновлений — вся логика бота."""
 
 import os
+import re
 
 from app.logger import log_event
 from app.max_client import send_message, answer_callback, upload_local_file, send_message_with_file
@@ -8,6 +9,7 @@ from app.nodes import packaging_paid
 from app import settings
 from app.sheets_states import set_state, get_state, clear_state
 from app.sheets_messages import find_client_by_message
+from app.sheets_phones import has_phone, save_phone
 from app.forwarding import (
     forward_to_manager, forward_to_klo, forward_to_accountant,
     forward_to_sales, forward_manager_reply_to_client,
@@ -15,35 +17,57 @@ from app.forwarding import (
 from app.sheets_clients import (
     update_manager_for_clients, update_manager_id,
 )
-from app.ai_client import ask_ai, parse_state_command, clear_conversation
+from app.ai_client import ask_ai, parse_state_command, clear_conversation, validate_client_data
+from app.klo_rotation import is_weekend
 
 # ─── Текстовые константы промптов (обновлено по скриншоту + новые правки) ────────────────────────────────
 
-TEXT_REQUEST_UNIVERSAL = "📝 Пожалуйста, напишите данные одним сообщением.\nМы передадим ваш запрос менеджеру."
-TEXT_TRACKING_NO = "📝 Напишите номер Вашего договора или ИНН, а также номер заказа одним сообщением.\nВаш запрос будет передан менеджеру и с вами скоро свяжутся!"
-TEXT_CALLBACK_REQUEST = "📞 **Обратный звонок**\n\nВ сообщении укажите Ваш ИНН или номер договора, а также интересующий Вас вопрос или проблему. Мы передадим информацию менеджеру."
-TEXT_FEEDBACK = "⭐ **Оставить отзыв**\n\nВ сообщении укажите номер Вашего ИНН или договора и напишите отзыв. Мы передадим информацию менеджеру."
-TEXT_CONTRACT_RENEWAL = "📝 **Перезаключить договор**\n\nУкажите номер договора или ИНН, а также почту или мобильный телефон и мы передадим запрос менеджеру."
-TEXT_NEW_SERVICES = "✨ **Подключить услуги**\n\nУкажите в сообщении номер Вашего договора или ИНН, а также опишите какая услуга(и) Вам требуется. Мы отправим Ваш запрос менеджеру."
-TEXT_FREE_BOX = "🆓 **Бесплатная упаковка**\n\nУкажите Ваш номер ИНН или договора, почту или мобильный телефон, а также в сообщении кратко укажите потребность в количестве и типе упаковки. Мы передадим запрос менеджеру."
-TEXT_REQUEST_ORDER_AND_INN = "📝 Укажите номер заказа, а также ИНН или номер договора одним сообщением.\nВаш запрос будет передан менеджеру и с вами скоро свяжутся!"
-TEXT_REQUEST_KLO = "📝 Напишите ваш номер договора или ИНН, а также комментарий — какая точно помощь вам нужна?\nМы передадим запрос менеджеру."
-TEXT_ORDER_OTHER = "❓ **Другой вопрос по заказу**\n\n🔢 Пожалуйста, укажите номер заказа и опишите ваш вопрос подробно одним сообщением.\nМы передадим запрос в отдел по работе с клиентами."
-TEXT_INTERNATIONAL = "🌍 **ЕАЭС или международная отправка**\n\nУкажите номер вашего договора или ИНН, а также телефон.\nДополнительно в комментарии просим указать маршрут, краткие параметры и тип груза.\nМы передадим запрос менеджеру."
-TEXT_FINANCE_INVOICE = "💳 **Получить счет**\n\nУкажите в сообщении Ваш ИНН или номер договора, а также контактный телефон. Мы передадим запрос менеджеру."
-TEXT_FINANCE_QUESTION = "❓ **Вопрос по счету**\n\nУкажите в сообщении Ваш ИНН или номер договора, номер счета и контактный телефон, а также напишите интересующий вопрос. Мы передадим информацию менеджеру."
+TEXT_REQUEST_UNIVERSAL = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также интересующий вопрос.\nМы передадим Ваш запрос менеджеру."
+TEXT_TRACKING_NO = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также номер заказа.\nВаш запрос будет передан менеджеру и с Вами скоро свяжутся!"
+TEXT_CALLBACK_REQUEST = "📞 **Обратный звонок**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также интересующий Вас вопрос или проблему. Мы передадим информацию менеджеру."
+TEXT_FEEDBACK = "⭐ **Оставить отзыв**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, и напишите отзыв. Мы передадим информацию менеджеру."
+TEXT_CONTRACT_RENEWAL = "📝 **Перезаключить договор**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться. Мы передадим запрос менеджеру."
+TEXT_NEW_SERVICES = "✨ **Подключить услуги**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также опишите какая услуга(и) Вам требуется. Мы отправим Ваш запрос менеджеру."
+TEXT_FREE_BOX = "🆓 **Бесплатная упаковка**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также кратко опишите потребность в количестве и типе упаковки. Мы передадим запрос менеджеру."
+TEXT_REQUEST_ORDER_AND_INN = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также номер заказа.\nВаш запрос будет передан менеджеру и с Вами скоро свяжутся!"
+TEXT_REQUEST_KLO = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также комментарий — какая точно помощь Вам нужна.\nМы передадим запрос менеджеру."
+TEXT_ORDER_OTHER = "❓ **Другой вопрос по заказу**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, номер заказа, а также подробно опишите Ваш вопрос.\nМы передадим запрос в отдел по работе с клиентами."
+TEXT_INTERNATIONAL = "🌍 **ЕАЭС или международная отправка**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться.\nДополнительно в комментарии просим указать маршрут, краткие параметры и тип груза.\nМы передадим запрос менеджеру."
+TEXT_FINANCE_INVOICE = "💳 **Получить счет**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться. Мы передадим запрос менеджеру."
+TEXT_FINANCE_QUESTION = "❓ **Вопрос по счету**\n\nУкажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, номер счета, а также напишите интересующий вопрос. Мы передадим информацию менеджеру."
 TEXT_FINANCE_PERIOD = (
-    "📝 Укажите период (ДД.ММ.ГГГГ - ДД.ММ.ГГГГ), ваш ИНН или номер договора одним сообщением."
+    "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также период (ДД.ММ.ГГГГ - ДД.ММ.ГГГГ)."
 )
 
 TEXT_NEED_HELP_DATE_DELIVERY = (
-    "📝 Пожалуйста, укажите номер заказа, а также Ваш ИНН или номер договора для уточнения информации.\nМы передадим Ваш запрос менеджеру."
+    "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также номер заказа для уточнения информации.\nМы передадим Ваш запрос менеджеру."
 )
 
 TEXT_CONFIRM_FORWARD_MANAGER = "✅ Ваш запрос будет передан менеджеру и с Вами скоро свяжутся!"
 TEXT_CONTRACT = "📄 **Заключить договор**\n\nУкажите название организации, ИНН, сайт и телефон одним сообщением. Мы передадим Ваш запрос менеджеру и свяжемся с Вами."
-TEXT_HELP_MANAGER = "📝 Укажите Ваш ИНН или номер договора одним сообщением, а также контактный телефон. Мы передадим запрос менеджеру."
-TEXT_REMEM_GMAIL = "📝 Укажите Ваш ИНН или номер договора одним сообщением, а также контактный телефон. Мы передадим запрос менеджеру."
+TEXT_HELP_MANAGER = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться. Мы передадим запрос менеджеру."
+TEXT_REMEM_GMAIL = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться. Мы передадим запрос менеджеру."
+
+TEXT_MISSING_BOTH = (
+    "К сожалению, я не смогу Вам помочь, так как не могу Вас идентифицировать. "
+    "Пожалуйста, укажите ИНН или номер договора, а также контакт для обратной "
+    "связи с Вами: телефон или e-mail"
+)
+TEXT_MISSING_IDENTIFIER = (
+    "📝 Пожалуйста, укажите Ваш ИНН или номер договора — без этого мы не сможем "
+    "Вас идентифицировать."
+)
+TEXT_MISSING_CONTACT = (
+    "📱 Пожалуйста, укажите контактный телефон или e-mail, по которому мы "
+    "сможем с Вами связаться."
+)
+
+TEXT_WEEKEND_AUTOREPLY = (
+    "Здравствуйте! Сейчас выходной день, и наши менеджеры работают только "
+    "в будни с 09:00 до 18:00. Пожалуйста, продублируйте Ваш вопрос на "
+    "почту dolgopa@cdek.ru — ответ обязательно придёт в рабочее время. "
+    "Благодарим за понимание и желаем хороших выходных!"
+)
 
 
 # ─── Утилиты ──────────────────────────────────────────────────────
@@ -86,6 +110,63 @@ def _confirm_and_maybe_return_ai(user_id: int, from_ai: bool, trace_id=None,
         _send(user_id, confirm + ai_continue, rows, trace_id)
     else:
         _confirm_to_client(user_id, trace_id, topic)
+
+
+# ─── Запрос телефона при первом входе ────────────────────────────
+
+TEXT_REQUEST_CONTACT = (
+    "📱 Для работы с ботом нам нужен ваш номер телефона.\n"
+    "Поделитесь им, нажав кнопку ниже:"
+)
+
+
+def _contact_keyboard() -> list[dict]:
+    return [
+        {
+            "type": "inline_keyboard",
+            "payload": {
+                "buttons": [[
+                    {"type": "request_contact", "text": "📱 Поделиться контактом"}
+                ]],
+            },
+        }
+    ]
+
+
+def _send_contact_request(user_id: int, trace_id=None):
+    payload = {
+        "text": TEXT_REQUEST_CONTACT,
+        "format": "markdown",
+        "attachments": _contact_keyboard(),
+    }
+    send_message(user_id, payload, trace_id)
+
+
+def _answer_contact_request(callback_id: str, trace_id=None):
+    body = {
+        "message": {
+            "text": TEXT_REQUEST_CONTACT,
+            "format": "markdown",
+            "attachments": _contact_keyboard(),
+        }
+    }
+    answer_callback(callback_id, body, trace_id)
+
+
+def _extract_phone_from_message(message: dict) -> str | None:
+    """Извлекает телефон из attachment type=contact (VCF TEL:...)."""
+    body = message.get("body") or {}
+    atts = body.get("attachments") or message.get("attachments") or []
+    for att in atts:
+        if att.get("type") != "contact":
+            continue
+        payload = att.get("payload") or {}
+        vcf = payload.get("vcf_info") or ""
+        if vcf:
+            m = re.search(r"TEL[^:]*:([+\d\s\-()]+)", vcf)
+            if m:
+                return re.sub(r"[^\d+]", "", m.group(1))
+    return None
 
 
 # ─── Меню ─────────────────────────────────────────────────────────
@@ -158,7 +239,7 @@ def _create_order_rf():
         "🇷🇺 **Заказ по РФ**\n\n"
         "Самостоятельно за несколько минут создайте заказ в личном кабинете:\n"
         "https://lk.cdek.ru/user/login\n\n"
-        "Или укажите ваш номер договора или ИНН и мы передадим запрос в отдел работы с клиентами."
+        "Или укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться — и мы передадим запрос в отдел работы с клиентами."
     )
     rows = [
         [packaging_paid.btn_cb("📝 Указать договор/ИНН", "request_klo")],
@@ -168,12 +249,7 @@ def _create_order_rf():
 
 
 def _create_order_international():
-    text = (
-        "🌍 **ЕАЭС или международная отправка**\n\n"
-        "Укажите номер вашего договора или ИНН, а также телефон.\n"
-        "Дополнительно в комментарии просим указать маршрут, краткие параметры и тип груза.\n"
-        "Мы передадим запрос менеджеру."
-    )
+    text = TEXT_INTERNATIONAL
     rows = [
         [packaging_paid.btn_cb("📝 Указать данные + комментарий", "need_help_with_contact")],
         [packaging_paid.btn_cb("◀️ Назад", "category_create_order")],
@@ -297,8 +373,8 @@ def _finance_act():
         "Самостоятельно сформируйте в личном кабинете:\n"
         "https://lk.cdek.ru/user/login\n"
         'Раздел **«Документы»** → **«Запросить акт сверки»**\n\n'
-        "Или укажите период (ДД.ММ.ГГГГ - ДД.ММ.ГГГГ), ваш ИНН или номер договора, "
-        "и мы передадим ваш запрос менеджеру."
+        "Или укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться, а также период (ДД.ММ.ГГГГ - ДД.ММ.ГГГГ), "
+        "и мы передадим Ваш запрос менеджеру."
     )
     rows = [
         [packaging_paid.btn_cb("📝 Указать период", "need_help_with_period")],
@@ -413,6 +489,15 @@ def _handle_callback(update: dict, trace_id: str):
     if not callback_id:
         log_event("skip", trace_id, reason="no_callback_id")
         return
+
+    # ── Гейт: если у пользователя нет телефона — просим поделиться ──
+    if user_id is not None:
+        try:
+            if not has_phone(user_id):
+                _answer_contact_request(callback_id, trace_id)
+                return
+        except Exception as e:
+            log_event("has_phone_error", trace_id, error=str(e))
 
     # 1) Главное меню
     if payload in ("main_menu", "menu"):
@@ -597,7 +682,7 @@ def _handle_callback(update: dict, trace_id: str):
         cart_text, _ = packaging_paid.view_cart(uid)
         if user_id is not None:
             set_state(user_id, "waiting_klo", topic="checkout", comment=cart_text)
-        text = "📝 Пожалуйста, напишите ваш ИНН одним сообщением."
+        text = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться."
         rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
         _answer(callback_id, text, rows, trace_id)
         return
@@ -625,6 +710,27 @@ def _handle_text_message(update: dict, trace_id: str):
     if not user_id:
         log_event("skip", trace_id, reason="no_user_id")
         return
+
+    # ── Приём поделённого контакта (request_contact кнопка) ──
+    phone = _extract_phone_from_message(message)
+    if phone:
+        try:
+            save_phone(user_id, phone)
+            log_event("phone_saved", trace_id, user_id=user_id)
+        except Exception as e:
+            log_event("save_phone_error", trace_id, error=str(e))
+        _send(user_id, "✅ Спасибо! Номер сохранён.", trace_id=trace_id)
+        t, rows = _main_menu()
+        _send(user_id, t, rows, trace_id)
+        return
+
+    # ── Гейт: у пользователя ещё нет телефона — просим поделиться ──
+    try:
+        if not has_phone(user_id):
+            _send_contact_request(user_id, trace_id)
+            return
+    except Exception as e:
+        log_event("has_phone_error", trace_id, error=str(e))
 
     # Команда /start → главное меню
     if text.strip().lower() in ("/start", "/menu", "start", "начать"):
@@ -725,7 +831,37 @@ def _handle_text_message(update: dict, trace_id: str):
 
         # ── Обычные состояния: пересылка ──
         from_ai = prev_comment == "from_ai"
+
+        # Проверка: есть ли в сообщении ИНН/договор и контакт (телефон/e-mail).
+        # Если чего-то не хватает — сообщаем клиенту и сохраняем состояние.
+        if state in ("waiting_message", "waiting_klo", "waiting_buh", "waiting_pro"):
+            validation = validate_client_data(text, trace_id)
+            missing = validation["missing"]
+            if missing:
+                log_event("client_data_incomplete", trace_id,
+                          user_id=user_id, state=state, topic=topic,
+                          missing=",".join(missing))
+                if "identifier" in missing and "contact" in missing:
+                    msg = TEXT_MISSING_BOTH
+                elif "identifier" in missing:
+                    msg = TEXT_MISSING_IDENTIFIER
+                else:
+                    msg = TEXT_MISSING_CONTACT
+                rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
+                _send(user_id, msg, rows, trace_id)
+                return
+
         clear_state(user_id)
+
+        # На выходных не-КЛО запросы (менеджер/бухгалтер/продажник) не
+        # пересылаем — отправляем клиенту автоответ. Запросы в КЛО уходят
+        # дежурному автоматически через get_klo_user_id().
+        if is_weekend() and state in ("waiting_message", "waiting_buh", "waiting_pro"):
+            log_event("weekend_autoreply", trace_id,
+                      user_id=user_id, state=state, topic=topic)
+            rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
+            _send(user_id, TEXT_WEEKEND_AUTOREPLY, rows, trace_id)
+            return
 
         if state == "waiting_message":
             forward_to_manager(user_id, user_name, text, topic, trace_id)
