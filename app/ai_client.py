@@ -98,8 +98,10 @@ def ask_ai(user_id: int, text: str, trace_id: str | None = None) -> str:
         data = resp.json()
         ai_text = data["choices"][0]["message"]["content"].strip()
 
-        # Сохраняем ответ AI в историю
-        _conversations[user_id].append({"role": "assistant", "content": ai_text})
+        # Сохраняем ответ AI в историю БЕЗ тега SET_STATE — он только
+        # смущает модель в следующих вызовах.
+        clean_text = re.sub(r'\s*\[SET_STATE:\w+:\w+\]\s*', ' ', ai_text).strip()
+        _conversations[user_id].append({"role": "assistant", "content": clean_text})
 
         log_event("ai_response", trace_id, user_id=user_id,
                   response=ai_text[:300])
@@ -113,6 +115,18 @@ def ask_ai(user_id: int, text: str, trace_id: str | None = None) -> str:
 def clear_conversation(user_id: int):
     """Очищает историю диалога пользователя."""
     _conversations.pop(user_id, None)
+
+
+def append_conversation(user_id: int, role: str, content: str) -> None:
+    """Добавляет запись в историю диалога без вызова модели.
+
+    Используется, когда между обычными репликами AI произошёл «побочный»
+    обмен (например, клиент прислал ИНН и бот переслал запрос менеджеру)
+    и AI нужно сохранить цельный контекст для следующей реплики.
+    """
+    _conversations[user_id].append({"role": role, "content": content})
+    if len(_conversations[user_id]) > MAX_HISTORY:
+        _conversations[user_id] = _conversations[user_id][-MAX_HISTORY:]
 
 
 def validate_client_data(text: str, trace_id: str | None = None) -> dict:
