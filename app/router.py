@@ -91,6 +91,14 @@ def _answer(callback_id: str, text: str, rows=None, trace_id=None):
     answer_callback(callback_id, {"message": _make_message(text, rows)}, trace_id)
 
 
+def _ai_mode_rows() -> list[list[dict]]:
+    """Стандартные кнопки под ответами AI-помощника."""
+    return [
+        [packaging_paid.btn_cb("📋 Показать меню", "show_menu")],
+        [packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")],
+    ]
+
+
 def _confirm_to_client(user_id: int, trace_id=None, topic: str | None = None):
     """Подтверждение клиенту, что запрос принят."""
     if topic in ("request_klo", "need_help_cheking", "need_help"):
@@ -110,8 +118,7 @@ def _confirm_and_maybe_return_ai(user_id: int, from_ai: bool, trace_id=None,
         set_state(user_id, "ai_mode", topic="ai_assistant")
         confirm = "✅ Ваш запрос принят! Менеджер свяжется с вами в ближайшее время."
         ai_continue = "\n\nЧем ещё могу помочь? Если вопросов больше нет — нажмите кнопку ниже."
-        rows = [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]]
-        _send(user_id, confirm + ai_continue, rows, trace_id)
+        _send(user_id, confirm + ai_continue, _ai_mode_rows(), trace_id)
         # Дозаписываем обмен в историю AI, чтобы модель не «забыла», что
         # между её прошлой репликой и следующим вопросом клиента произошла
         # передача запроса менеджеру.
@@ -530,12 +537,17 @@ def _handle_callback(update: dict, trace_id: str):
                 log_event("set_state_error", trace_id, error=str(e), payload=payload)
             clear_conversation(user_id)
         text = (
-            "🤖 **Виртуальный помощник**\n\n"
+            "🤖 **Виртуальный помощник СДЭК**\n\n"
             "Здравствуйте! Я виртуальный помощник компании СДЭК.\n"
-            "Задайте ваш вопрос, и я постараюсь помочь.\n\n"
-            "Чтобы завершить разговор, нажмите кнопку ниже."
+            "Задайте ваш вопрос текстом — и я постараюсь помочь.\n\n"
+            "Если удобнее выбрать пункт из списка — нажмите «📋 Показать меню»."
         )
-        rows = [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]]
+        _answer(callback_id, text, _ai_mode_rows(), trace_id)
+        return
+
+    # 1.1.1) Показать меню, не выходя из AI-режима
+    if payload == "show_menu":
+        text, rows = _main_menu()
         _answer(callback_id, text, rows, trace_id)
         return
 
@@ -730,8 +742,19 @@ def _handle_text_message(update: dict, trace_id: str):
         except Exception as e:
             log_event("save_phone_error", trace_id, error=str(e))
         _send(user_id, "✅ Спасибо! Номер сохранён.", trace_id=trace_id)
-        t, rows = _main_menu()
-        _send(user_id, t, rows, trace_id)
+        # После сохранения телефона сразу в AI-режим
+        try:
+            set_state(user_id, "ai_mode", topic="ai_assistant")
+        except Exception as e:
+            log_event("set_state_error", trace_id, error=str(e))
+        clear_conversation(user_id)
+        welcome = (
+            "🤖 **Виртуальный помощник СДЭК**\n\n"
+            "Здравствуйте! Я виртуальный помощник компании СДЭК.\n"
+            "Задайте ваш вопрос текстом — и я постараюсь помочь.\n\n"
+            "Если удобнее выбрать пункт из списка — нажмите «📋 Показать меню»."
+        )
+        _send(user_id, welcome, _ai_mode_rows(), trace_id)
         return
 
     # ── Гейт: у пользователя ещё нет телефона — просим поделиться ──
@@ -742,8 +765,25 @@ def _handle_text_message(update: dict, trace_id: str):
     except Exception as e:
         log_event("has_phone_error", trace_id, error=str(e))
 
-    # Команда /start → главное меню
-    if text.strip().lower() in ("/start", "/menu", "start", "начать"):
+    # Команда /start / начать → сразу в AI-режим (меню всегда доступно кнопкой)
+    cmd = text.strip().lower()
+    if cmd in ("/start", "start", "начать"):
+        try:
+            set_state(user_id, "ai_mode", topic="ai_assistant")
+        except Exception as e:
+            log_event("set_state_error", trace_id, error=str(e))
+        clear_conversation(user_id)
+        welcome = (
+            "🤖 **Виртуальный помощник СДЭК**\n\n"
+            "Здравствуйте! Я виртуальный помощник компании СДЭК.\n"
+            "Задайте ваш вопрос текстом — и я постараюсь помочь.\n\n"
+            "Если удобнее выбрать пункт из списка — нажмите «📋 Показать меню»."
+        )
+        _send(user_id, welcome, _ai_mode_rows(), trace_id)
+        return
+
+    # /menu → старое поведение: показать главное меню напрямую
+    if cmd == "/menu":
         t, rows = _main_menu()
         _send(user_id, t, rows, trace_id)
         return
@@ -822,8 +862,7 @@ def _handle_text_message(update: dict, trace_id: str):
             ai_response = ask_ai(user_id, text, trace_id)
             if not ai_response:
                 _send(user_id, "Извините, помощник временно недоступен. Попробуйте позже.",
-                      [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]],
-                      trace_id)
+                      _ai_mode_rows(), trace_id)
                 return
 
             clean_text, ai_state, ai_topic = parse_state_command(ai_response)
@@ -835,7 +874,7 @@ def _handle_text_message(update: dict, trace_id: str):
                 _send(user_id, clean_text, trace_id=trace_id)
             else:
                 # Обычный ответ AI — кнопка завершения всегда внизу
-                rows = [[packaging_paid.btn_cb("❌ Закончить разговор", "stop_ai")]]
+                rows = _ai_mode_rows()
                 _send(user_id, clean_text, rows, trace_id)
             return
 
