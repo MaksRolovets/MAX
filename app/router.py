@@ -68,6 +68,11 @@ TEXT_MISSING_CONTACT = (
     "📱 Пожалуйста, укажите контактный телефон или e-mail, по которому мы "
     "сможем с Вами связаться."
 )
+TEXT_NEED_CONTACT_ONLY = (
+    "📱 Нам всё же нужен **номер телефона или e-mail** для связи — иначе "
+    "менеджер не сможет с Вами связаться.\n\n"
+    "Пожалуйста, оставьте контакт одним сообщением."
+)
 
 TEXT_WEEKEND_AUTOREPLY = (
     "Здравствуйте! Сейчас выходной день, и наши менеджеры работают только "
@@ -925,8 +930,9 @@ def _handle_text_message(update: dict, trace_id: str):
                           user_id=user_id, state=state, topic=topic,
                           missing=",".join(missing), retry=retry_count)
 
-                if retry_count >= 2:
-                    # Вторая и далее — не задерживаем клиента, уводим в группу.
+                if retry_count >= 3:
+                    # Третья попытка — клиент так и не указал данные.
+                    # Уводим запрос в резервную группу.
                     clear_state(user_id)
                     forward_unidentified_to_group(user_id, user_name, text,
                                                    topic, trace_id)
@@ -934,9 +940,11 @@ def _handle_text_message(update: dict, trace_id: str):
                                                   topic, client_text=text)
                     return
 
-                # Первая попытка — стандартная просьба дозаполнить, счётчик
-                # сохраняем в состояние, comment/topic не теряем.
-                if "identifier" in missing and "contact" in missing:
+                # 1-я попытка — стандартная просьба про ИНН+контакт.
+                # 2-я попытка — последний шанс: просим хотя бы контакт.
+                if retry_count >= 2:
+                    msg = TEXT_NEED_CONTACT_ONLY
+                elif "identifier" in missing and "contact" in missing:
                     msg = TEXT_MISSING_BOTH
                 elif "identifier" in missing:
                     msg = TEXT_MISSING_IDENTIFIER
