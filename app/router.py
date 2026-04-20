@@ -16,6 +16,7 @@ from app.sheets_phones import has_phone, save_phone
 from app.forwarding import (
     forward_to_manager, forward_to_klo, forward_to_accountant,
     forward_to_sales, forward_manager_reply_to_client,
+    forward_unidentified_to_group,
 )
 from app.sheets_clients import (
     update_manager_for_clients, update_manager_id,
@@ -906,14 +907,35 @@ def _handle_text_message(update: dict, trace_id: str):
         from_ai = prev_comment == "from_ai"
 
         # Проверка: есть ли в сообщении ИНН/договор и контакт (телефон/e-mail).
-        # Если чего-то не хватает — сообщаем клиенту и сохраняем состояние.
+        # Первая неудачная попытка — просим дозаполнить. Вторая — уводим
+        # запрос в резервную группу с пометкой «не смог идентифицироваться».
         if state in ("waiting_message", "waiting_klo", "waiting_buh", "waiting_pro"):
             validation = validate_client_data(text, trace_id)
             missing = validation["missing"]
             if missing:
+                # Счётчик попыток храним в поле order_number таблицы состояний
+                # (в этих флоу оно не используется под свои нужды).
+                try:
+                    retry_count = int(state_data.get("order_number") or "0")
+                except (TypeError, ValueError):
+                    retry_count = 0
+                retry_count += 1
+
                 log_event("client_data_incomplete", trace_id,
                           user_id=user_id, state=state, topic=topic,
-                          missing=",".join(missing))
+                          missing=",".join(missing), retry=retry_count)
+
+                if retry_count >= 2:
+                    # Вторая и далее — не задерживаем клиента, уводим в группу.
+                    clear_state(user_id)
+                    forward_unidentified_to_group(user_id, user_name, text,
+                                                   topic, trace_id)
+                    _confirm_and_maybe_return_ai(user_id, from_ai, trace_id,
+                                                  topic, client_text=text)
+                    return
+
+                # Первая попытка — стандартная просьба дозаполнить, счётчик
+                # сохраняем в состояние, comment/topic не теряем.
                 if "identifier" in missing and "contact" in missing:
                     msg = TEXT_MISSING_BOTH
                 elif "identifier" in missing:
@@ -921,6 +943,12 @@ def _handle_text_message(update: dict, trace_id: str):
                 else:
                     msg = TEXT_MISSING_CONTACT
                 rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
+                try:
+                    set_state(user_id, state, topic=topic,
+                              comment=prev_comment,
+                              order_number=str(retry_count))
+                except Exception as e:
+                    log_event("set_state_error", trace_id, error=str(e))
                 _send(user_id, msg, rows, trace_id)
                 return
 

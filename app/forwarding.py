@@ -252,6 +252,35 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
         _fallback_to_group(user_id, payload, "продажник не настроен", trace_id)
 
 
+def forward_unidentified_to_group(user_id: int, user_name: str, text: str,
+                                   topic: str, trace_id: str | None = None) -> bool:
+    """Клиент не смог указать ИНН/договор+контакт — уводим в резервную группу.
+
+    Возвращает True, если группа настроена и сообщение ушло.
+    """
+    phone = None
+    try:
+        phone = get_phone(user_id)
+    except Exception:
+        pass
+
+    msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
+    payload = {"text": msg_text, "format": "markdown"}
+
+    reason = "клиент не указал ИНН/договор после 2 попыток"
+    sent = _fallback_to_group(user_id, payload, reason, trace_id)
+    if not sent:
+        log_event("unidentified_not_sent", trace_id, user_id=user_id, topic=topic)
+
+    try:
+        log_request(user_id, topic,
+                    result="unidentified_group" if sent else "unidentified_lost",
+                    comment=text[:200])
+    except Exception:
+        pass
+    return sent
+
+
 def forward_manager_reply_to_client(client_user_id: int, manager_text: str,
                                     trace_id: str | None = None):
     """Пересылает ответ менеджера клиенту."""
