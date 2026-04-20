@@ -64,19 +64,52 @@ def _parse_response(resp):
 
 
 def _format_manager_message(user_id: int, user_name: str, topic: str,
-                            text: str, phone: str | None) -> str:
-    """Форматирует сообщение для менеджера."""
+                            text: str, phone: str | None,
+                            counterparty: str | None = None) -> str:
+    """Форматирует сообщение для менеджера.
+
+    Если clients-таблица нашла контрагента по ИНН/договору — добавляем
+    строку «Контрагент», чтобы менеджер сразу понимал, с кем работать.
+    """
     source = TOPIC_LABELS.get(topic, topic or "Неизвестно")
     phone_str = f"+{phone}" if phone else "не указан"
 
-    return (
-        f"📩 **Новый запрос от клиента**\n\n"
-        f"📌 Источник: {source}\n"
-        f"👤 Клиент: {user_name}\n"
-        f"🆔 ID: {user_id}\n"
-        f"📞 Телефон: {phone_str}\n\n"
-        f"💬 Сообщение:\n{text}"
-    )
+    lines = [
+        "📩 **Новый запрос от клиента**",
+        "",
+        f"📌 Источник: {source}",
+    ]
+    if counterparty:
+        lines.append(f"🏢 Контрагент: {counterparty}")
+    lines.extend([
+        f"👤 Клиент: {user_name}",
+        f"🆔 ID: {user_id}",
+        f"📞 Телефон: {phone_str}",
+        "",
+        f"💬 Сообщение:\n{text}",
+    ])
+    return "\n".join(lines)
+
+
+def _lookup_client(text: str) -> dict | None:
+    """Пробует найти клиента в таблице клиентов по ИНН или номеру договора
+    из произвольного текста. Возвращает словарь клиента либо None."""
+    parsed = extract_data(text)
+    inn = parsed.get("inn")
+    contract = parsed.get("contract")
+
+    client = None
+    if inn:
+        try:
+            client = find_client_by_inn(inn)
+        except Exception:
+            client = None
+    if not client and contract:
+        try:
+            client = find_client_by_contract(contract)
+        except Exception:
+            client = None
+    return client
 
 
 def _fallback_to_group(user_id: int, payload: dict, reason: str,
@@ -115,26 +148,12 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
+    client = _lookup_client(text)
+    counterparty = (client or {}).get("name") or None
+
+    msg_text = _format_manager_message(user_id, user_name, topic, text,
+                                        phone, counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown"}
-
-    # Парсим ИНН/договор из текста
-    parsed = extract_data(text)
-    inn = parsed.get("inn")
-    contract = parsed.get("contract")
-
-    # Ищем клиента и его менеджера
-    client = None
-    if inn:
-        try:
-            client = find_client_by_inn(inn)
-        except Exception:
-            pass
-    if not client and contract:
-        try:
-            client = find_client_by_contract(contract)
-        except Exception:
-            pass
 
     manager_max_id = None
     if client and client.get("manager_name"):
@@ -160,8 +179,7 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
             result = "forwarded_group"
         else:
             log_event("forward_to_manager_lost", trace_id,
-                      user_id=user_id, topic=topic,
-                      inn=inn, contract=contract)
+                      user_id=user_id, topic=topic)
 
     # Логируем
     try:
@@ -179,7 +197,9 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
+    counterparty = (_lookup_client(text) or {}).get("name") or None
+    msg_text = _format_manager_message(user_id, user_name, topic, text,
+                                        phone, counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown"}
 
     klo_id = get_klo_user_id()
@@ -211,7 +231,9 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
+    counterparty = (_lookup_client(text) or {}).get("name") or None
+    msg_text = _format_manager_message(user_id, user_name, topic, text,
+                                        phone, counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown"}
 
     sent_any = False
@@ -238,7 +260,9 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
+    counterparty = (_lookup_client(text) or {}).get("name") or None
+    msg_text = _format_manager_message(user_id, user_name, topic, text,
+                                        phone, counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown"}
 
     if settings.SALES_USER_ID:
