@@ -2,7 +2,7 @@
 
 from app import settings
 from app.logger import log_event
-from app.max_client import send_message
+from app.max_client import send_message, send_message_to_chat
 from app.inn_parser import extract_data
 from app.klo_rotation import get_klo_user_id
 from app.sheets_clients import find_client_by_inn, find_client_by_contract, find_manager_id
@@ -79,6 +79,33 @@ def _format_manager_message(user_id: int, user_name: str, topic: str,
     )
 
 
+def _fallback_to_group(user_id: int, payload: dict, reason: str,
+                        trace_id: str | None = None) -> bool:
+    """Отправляет payload в резервную группу (GENERAL_CHAT_ID) с пометкой причины.
+
+    Возвращает True, если группа настроена и сообщение ушло.
+    """
+    chat_id = settings.GENERAL_CHAT_ID
+    if not chat_id:
+        log_event("fallback_group_not_configured", trace_id,
+                  user_id=user_id, reason=reason)
+        return False
+
+    # Добавляем причину попадания в резерв — чтобы операторы в группе
+    # понимали, почему запрос пришёл сюда, а не менеджеру.
+    group_payload = dict(payload)
+    prefix = f"⚠️ *Резервный канал — {reason}*\n\n"
+    group_payload["text"] = prefix + payload.get("text", "")
+
+    resp = send_message_to_chat(chat_id, group_payload, trace_id)
+    msg_id, _ = _parse_response(resp)
+    if msg_id:
+        save_message_map(str(msg_id), user_id, manager_chat_id=str(chat_id))
+    log_event("forwarded_to_group", trace_id,
+              chat_id=chat_id, user_id=user_id, reason=reason)
+    return True
+
+
 def forward_to_manager(user_id: int, user_name: str, text: str,
                        topic: str, trace_id: str | None = None):
     """Основная логика пересылки — ищет менеджера по ИНН/договору, пересылает."""
@@ -116,6 +143,7 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
         except Exception:
             pass
 
+    result = "no_manager"
     if manager_max_id:
         resp = send_message(manager_max_id, payload, trace_id)
         # Сохраняем связку для ответа менеджера
@@ -123,10 +151,21 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
         if msg_id:
             save_message_map(str(msg_id), user_id,
                              manager_chat_id=str(manager_chat_id))
+        result = "forwarded"
+    else:
+        # Менеджер не найден (нет клиента в таблице или не указан) — уводим
+        # запрос в резервную группу, чтобы он не потерялся.
+        reason = "менеджер не найден по ИНН/договору"
+        if _fallback_to_group(user_id, payload, reason, trace_id):
+            result = "forwarded_group"
+        else:
+            log_event("forward_to_manager_lost", trace_id,
+                      user_id=user_id, topic=topic,
+                      inn=inn, contract=contract)
 
     # Логируем
     try:
-        log_request(user_id, topic, result="forwarded", comment=text[:200])
+        log_request(user_id, topic, result=result, comment=text[:200])
     except Exception:
         pass
 
@@ -144,16 +183,21 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
     payload = {"text": msg_text, "format": "markdown"}
 
     klo_id = get_klo_user_id()
+    result = "no_klo"
     if klo_id:
         resp = send_message(klo_id, payload, trace_id)
         msg_id, klo_chat_id = _parse_response(resp)
         if msg_id:
             save_message_map(str(msg_id), user_id,
                              manager_chat_id=str(klo_chat_id))
-    log_event("forwarded_to_klo", trace_id, klo_id=klo_id, user_id=user_id)
+        result = "forwarded_klo"
+        log_event("forwarded_to_klo", trace_id, klo_id=klo_id, user_id=user_id)
+    else:
+        if _fallback_to_group(user_id, payload, "КЛО не настроен", trace_id):
+            result = "forwarded_group"
 
     try:
-        log_request(user_id, topic, result="forwarded_klo", comment=text[:200])
+        log_request(user_id, topic, result=result, comment=text[:200])
     except Exception:
         pass
 
@@ -170,6 +214,7 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
     msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
     payload = {"text": msg_text, "format": "markdown"}
 
+    sent_any = False
     for acc_id in (settings.ACCOUNTANT_USER_ID, settings.ACCOUNTANT2_USER_ID):
         if acc_id:
             resp = send_message(acc_id, payload, trace_id)
@@ -177,7 +222,11 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
             if msg_id:
                 save_message_map(str(msg_id), user_id,
                                  manager_chat_id=str(acc_chat_id))
-    log_event("forwarded_to_accountant", trace_id, user_id=user_id)
+            sent_any = True
+    if sent_any:
+        log_event("forwarded_to_accountant", trace_id, user_id=user_id)
+    else:
+        _fallback_to_group(user_id, payload, "бухгалтер не настроен", trace_id)
 
 
 def forward_to_sales(user_id: int, user_name: str, text: str,
@@ -198,7 +247,9 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
         if msg_id:
             save_message_map(str(msg_id), user_id,
                              manager_chat_id=str(sales_chat_id))
-    log_event("forwarded_to_sales", trace_id, user_id=user_id)
+        log_event("forwarded_to_sales", trace_id, user_id=user_id)
+    else:
+        _fallback_to_group(user_id, payload, "продажник не настроен", trace_id)
 
 
 def forward_manager_reply_to_client(client_user_id: int, manager_text: str,

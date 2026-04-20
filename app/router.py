@@ -4,7 +4,10 @@ import os
 import re
 
 from app.logger import log_event
-from app.max_client import send_message, answer_callback, upload_local_file, send_message_with_file
+from app.max_client import (
+    send_message, answer_callback, upload_local_file, send_message_with_file,
+    send_message_to_chat,
+)
 from app.nodes import packaging_paid
 from app import settings
 from app.sheets_states import set_state, get_state, clear_state
@@ -731,6 +734,27 @@ def _handle_text_message(update: dict, trace_id: str):
 
     if not user_id:
         log_event("skip", trace_id, reason="no_user_id")
+        return
+
+    # ── /chat_id — утилита для получения chat_id текущего чата.
+    # Идёт ДО phone-gate'а, чтобы работала в группах, где у бота нет
+    # «телефона» отправителя.
+    if text.strip().lower() == "/chat_id":
+        recipient = message.get("recipient") or {}
+        chat_id = recipient.get("chat_id")
+        chat_type = recipient.get("chat_type", "unknown")
+        reply_text = (
+            f"🆔 `chat_id`: `{chat_id}`\n"
+            f"📂 `chat_type`: `{chat_type}`\n"
+            f"👤 `user_id` отправителя: `{user_id}`"
+        )
+        reply_payload = {"text": reply_text, "format": "markdown"}
+        if chat_type in ("chat", "channel") and chat_id:
+            send_message_to_chat(chat_id, reply_payload, trace_id)
+        else:
+            send_message(user_id, reply_payload, trace_id)
+        log_event("chat_id_queried", trace_id,
+                  chat_id=chat_id, chat_type=chat_type, user_id=user_id)
         return
 
     # ── Приём поделённого контакта (request_contact кнопка) ──

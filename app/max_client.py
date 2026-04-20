@@ -50,6 +50,20 @@ def send_message(user_id: int, payload: dict, trace_id: str | None = None):
     return resp
 
 
+def send_message_to_chat(chat_id: int, payload: dict, trace_id: str | None = None):
+    """POST /messages?chat_id=... — отправка в групповой чат/канал."""
+    log_event("http_request", trace_id, method="POST", path="/messages", chat_id=chat_id)
+    resp = requests.post(
+        f"{API_BASE}/messages",
+        params={"chat_id": chat_id},
+        headers=_headers(),
+        json=payload,
+        timeout=_HTTP_TIMEOUT,
+    )
+    log_event("http_response", trace_id, status=resp.status_code, body=resp.text[:500])
+    return resp
+
+
 def upload_local_file(local_path: str, trace_id: str | None = None) -> str | None:
     """POST /uploads → загрузка файла по url → token для вложения type=file."""
     if not os.path.isfile(local_path):
