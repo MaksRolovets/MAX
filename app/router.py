@@ -464,20 +464,20 @@ SIMPLE_CALLBACKS = {
 # Формат: callback_data → (state, topic, prompt_text)
 STATE_CALLBACKS = {
     # → waiting_message (пересылка менеджеру через ИНН-поиск)
-    "need_help": ("waiting_message", "need_help", TEXT_REQUEST_ORDER_AND_INN),
     "need_help_with_contact": ("waiting_message", "need_help_with_contact", TEXT_INTERNATIONAL),
     "callback_request": ("waiting_message", "callback_request", TEXT_CALLBACK_REQUEST),
     "feedback": ("waiting_message", "feedback", TEXT_FEEDBACK),
     "contract_renewal": ("waiting_message", "contract_renewal", TEXT_CONTRACT_RENEWAL),
     "new_services": ("waiting_message", "new_services", TEXT_NEW_SERVICES),
-    "tracking_solved_no": ("waiting_message", "tracking_solved_no", TEXT_TRACKING_NO),
     "tracking_help_yes": ("waiting_message", "tracking_help_yes", TEXT_REQUEST_UNIVERSAL),
     "free_pckaiging_data": ("waiting_message", "free_pckaiging_data", TEXT_FREE_BOX),
     # → waiting_klo (пересылка в КЛО)
     "request_klo": ("waiting_klo", "request_klo", TEXT_REQUEST_KLO),
     "order_other": ("waiting_klo", "order_other", TEXT_ORDER_OTHER),
+    "need_help": ("waiting_klo", "need_help", TEXT_REQUEST_ORDER_AND_INN),
     "need_help_with_order": ("waiting_klo", "need_help_with_order", TEXT_REQUEST_ORDER_AND_INN),
     "need_help_cheking": ("waiting_klo", "need_help_cheking", TEXT_NEED_HELP_DATE_DELIVERY),
+    "tracking_solved_no": ("waiting_klo", "tracking_solved_no", TEXT_TRACKING_NO),
 
     # → waiting_buh (пересылка бухгалтеру)
     "finance_invoice": ("waiting_buh", "finance_invoice", TEXT_FINANCE_INVOICE),
@@ -915,7 +915,13 @@ def _handle_text_message(update: dict, trace_id: str):
         # Первая неудачная попытка — просим дозаполнить. Вторая — уводим
         # запрос в резервную группу с пометкой «не смог идентифицироваться».
         if state in ("waiting_message", "waiting_klo", "waiting_buh", "waiting_pro"):
-            validation = validate_client_data(text, trace_id)
+            # Накапливаем текст между попытками — чтобы ИНН из первого
+            # сообщения не «забывался», когда клиент присылает контакт
+            # отдельной репликой. Храним в свободном поле `inn`.
+            prev_accum = (state_data.get("inn") or "").strip()
+            combined_text = f"{prev_accum}\n{text}" if prev_accum else text
+
+            validation = validate_client_data(combined_text, trace_id)
             missing = validation["missing"]
             if missing:
                 # Счётчик попыток храним в поле order_number таблицы состояний
@@ -932,18 +938,20 @@ def _handle_text_message(update: dict, trace_id: str):
 
                 if retry_count >= 3:
                     # Третья попытка — клиент так и не указал данные.
-                    # Уводим запрос в резервную группу.
+                    # Уводим весь накопленный текст в резервную группу.
                     clear_state(user_id)
-                    forward_unidentified_to_group(user_id, user_name, text,
-                                                   topic, trace_id)
+                    forward_unidentified_to_group(user_id, user_name,
+                                                   combined_text, topic, trace_id)
                     _confirm_and_maybe_return_ai(user_id, from_ai, trace_id,
                                                   topic, client_text=text)
                     return
 
-                # 1-я попытка — стандартная просьба про ИНН+контакт.
-                # 2-я попытка — последний шанс: просим хотя бы контакт.
+                # Формулировку выбираем по тому, чего реально не хватает
+                # (с учётом накопленных данных), а не по номеру попытки.
                 if retry_count >= 2:
-                    msg = TEXT_NEED_CONTACT_ONLY
+                    # Последний шанс — мягче, но всё равно про недостающее.
+                    msg = TEXT_NEED_CONTACT_ONLY if "contact" in missing \
+                        else TEXT_MISSING_IDENTIFIER
                 elif "identifier" in missing and "contact" in missing:
                     msg = TEXT_MISSING_BOTH
                 elif "identifier" in missing:
@@ -954,11 +962,16 @@ def _handle_text_message(update: dict, trace_id: str):
                 try:
                     set_state(user_id, state, topic=topic,
                               comment=prev_comment,
-                              order_number=str(retry_count))
+                              order_number=str(retry_count),
+                              inn=combined_text)
                 except Exception as e:
                     log_event("set_state_error", trace_id, error=str(e))
                 _send(user_id, msg, rows, trace_id)
                 return
+
+            # Валидация прошла — пересылаем сотруднику весь накопленный
+            # текст, чтобы ИНН+контакт из разных сообщений ушли вместе.
+            text = combined_text
 
         clear_state(user_id)
 
