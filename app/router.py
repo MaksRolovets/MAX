@@ -484,10 +484,13 @@ STATE_CALLBACKS = {
     "finance_question": ("waiting_buh", "finance_question", TEXT_FINANCE_QUESTION),
     "need_help_with_period": ("waiting_buh", "need_help_with_period", TEXT_FINANCE_PERIOD),
 
-    # → waiting_pro (пересылка продажнику)
+    # → waiting_pro (продажнику — ТОЛЬКО заключение нового договора)
     "contract": ("waiting_pro", "contract", TEXT_CONTRACT),
-    "need_help_manager": ("waiting_pro", "need_help_manager", TEXT_HELP_MANAGER),
-    "remem_gmail": ("waiting_pro", "remem_gmail", TEXT_REMEM_GMAIL),
+
+    # → waiting_message (закреплённый менеджер по ИНН): ЛК-вопросы
+    # существующих клиентов — восстановление доступа и обучение.
+    "need_help_manager": ("waiting_message", "need_help_manager", TEXT_HELP_MANAGER),
+    "remem_gmail": ("waiting_message", "remem_gmail", TEXT_REMEM_GMAIL),
 }
 
 # ─── Обработка callback-ов ─────────────────────────────────────────
