@@ -474,10 +474,10 @@ STATE_CALLBACKS = {
     # → waiting_klo (пересылка в КЛО)
     "request_klo": ("waiting_klo", "request_klo", TEXT_REQUEST_KLO),
     "order_other": ("waiting_klo", "order_other", TEXT_ORDER_OTHER),
-    "need_help": ("waiting_klo", "need_help", TEXT_REQUEST_ORDER_AND_INN),
-    "need_help_with_order": ("waiting_klo", "need_help_with_order", TEXT_REQUEST_ORDER_AND_INN),
-    "need_help_cheking": ("waiting_klo", "need_help_cheking", TEXT_NEED_HELP_DATE_DELIVERY),
-    "tracking_solved_no": ("waiting_klo", "tracking_solved_no", TEXT_TRACKING_NO),
+    "need_help": ("waiting_klo", "order_edit", TEXT_REQUEST_ORDER_AND_INN),
+    "need_help_with_order": ("waiting_klo", "order_edit", TEXT_REQUEST_ORDER_AND_INN),
+    "need_help_cheking": ("waiting_klo", "order_date", TEXT_NEED_HELP_DATE_DELIVERY),
+    "tracking_solved_no": ("waiting_klo", "order_track", TEXT_TRACKING_NO),
 
     # → waiting_buh (пересылка бухгалтеру)
     "finance_invoice": ("waiting_buh", "finance_invoice", TEXT_FINANCE_INVOICE),

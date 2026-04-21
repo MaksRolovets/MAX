@@ -12,38 +12,48 @@ from app.sheets_logs import log_request
 
 # Человекочитаемые названия тем
 TOPIC_LABELS = {
+    # Заказы
     "category_order": "Вопрос по заказу",
     "order_track": "Отследить заказ",
+    "track_order": "Отследить заказ",        # частая «перевёрнутая» вариация от ИИ
     "order_date": "Назначить дату доставки",
     "order_edit": "Внести изменения в заказ",
     "order_other": "Другой вопрос по заказу",
+    # Создание заказа
+    "create_order_rf": "Создать заказ (РФ)",
+    "create_order_international": "Создать заказ (международный)",
+    "request_klo": "Создать заказ (РФ) — данные",
+    "need_help_with_contact": "Создать заказ (международный) — данные",
+    # ЛК
     "category_lk": "Личный кабинет",
     "lk_restore": "Восстановить доступ ЛК",
     "lk_training": "Обучение ЛК",
+    "remem_gmail": "Восстановление ЛК — не помнит почту",
+    "need_help_manager": "Обучение ЛК — помощь менеджера",
+    # Финансы
     "category_finance": "Взаиморасчёты",
     "finance_act": "Акт сверки",
-    "finance_invoice": "Получить счет",
-    "finance_question": "Вопрос по счету",
+    "finance_invoice": "Получить счёт",
+    "finance_question": "Вопрос по счёту",
+    "need_help_with_period": "Акт сверки — период",
+    # Упаковка
     "category_packaging": "Упаковка",
     "packaging_paid": "Платная упаковка",
     "packaging_free": "Бесплатная упаковка",
-    "free_pckaiging_data": "Бесплатная упаковка (данные)",
+    "free_pckaiging_data": "Бесплатная упаковка — данные",
+    "checkout": "Оформление заказа упаковки",
+    # Общее
     "contract": "Заключить договор",
     "contract_renewal": "Перезаключить договор",
     "callback_request": "Обратный звонок",
     "new_services": "Подключить услуги",
     "feedback": "Отзыв",
+    # Устаревшие — оставляем как fallback, чтобы не уходило сырой латиницей
     "need_help": "Нужна помощь",
-    "need_help_with_contact": "Помощь (контакт)",
-    "need_help_with_period": "Помощь (период)",
-    "need_help_with_order": "Помощь (заказ)",
+    "need_help_with_order": "Помощь с заказом",
     "need_help_cheking": "Дата доставки — помощь",
-    "need_help_manager": "Помощь менеджера",
-    "tracking_solved_no": "Трекинг не решён",
+    "tracking_solved_no": "Отследить заказ",
     "tracking_help_yes": "Помощь с трекингом",
-    "remem_gmail": "Не помнит почту",
-    "request_klo": "Запрос в КЛО",
-    "checkout": "Оформление заказа упаковки",
 }
 
 
