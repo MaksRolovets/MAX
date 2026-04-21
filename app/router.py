@@ -898,9 +898,13 @@ def _handle_text_message(update: dict, trace_id: str):
             clean_text, ai_state, ai_topic = parse_state_command(ai_response)
 
             if ai_state and ai_topic:
-                # AI решил передать запрос сотруднику — выходим из ai_mode
-                # Помечаем comment="from_ai", чтобы после пересылки вернуть в ai_mode
-                set_state(user_id, ai_state, topic=ai_topic, comment="from_ai")
+                # AI решил передать запрос сотруднику — выходим из ai_mode.
+                # Помечаем comment="from_ai", чтобы после пересылки вернуть в ai_mode.
+                # Триггерное сообщение кладём в inn как начальный аккумулятор —
+                # если клиент уже дал ИНН/контакт в разговоре с ИИ, они
+                # подхватятся валидатором при следующем сообщении.
+                set_state(user_id, ai_state, topic=ai_topic,
+                          comment="from_ai", inn=text)
                 _send(user_id, clean_text, trace_id=trace_id)
             else:
                 # Обычный ответ AI — кнопка завершения всегда внизу
