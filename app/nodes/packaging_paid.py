@@ -93,7 +93,12 @@ def categories_menu():
 
     rows.append([btn_cb("🛒 Корзина", "seek_cart")])
     rows.append([btn_cb("◀️ Назад", "category_packaging")])
-    return "💰 **Платная упаковка**\n\nВыберите категорию:", rows
+    text = (
+        "💰 **Платная упаковка**\n\n"
+        "Выберите категорию, чтобы увидеть типы, размеры и цены.\n\n"
+        "Какая упаковка вам нужна?"
+    )
+    return text, rows
 
 
 def items_menu(category: str):
