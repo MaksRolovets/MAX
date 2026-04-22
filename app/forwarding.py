@@ -5,10 +5,19 @@ from app.logger import log_event
 from app.max_client import send_message, send_message_to_chat
 from app.inn_parser import extract_data
 from app.klo_rotation import get_klo_user_id
+from app.nodes.packaging_paid import btn_cb, keyboard
 from app.sheets_clients import find_client_by_inn, find_client_by_contract, find_manager_id
 from app.sheets_phones import get_phone
 from app.sheets_messages import save_message_map
 from app.sheets_logs import log_request
+
+
+def _manager_actions(client_user_id: int) -> list:
+    """Клавиатура «Взял в работу / Решено» под карточкой менеджера."""
+    return keyboard([
+        [btn_cb("✅ Взял в работу", f"mgr_ack:{client_user_id}")],
+        [btn_cb("✔️ Решено", f"mgr_done:{client_user_id}")],
+    ])
 
 # Человекочитаемые названия тем
 TOPIC_LABELS = {
@@ -163,7 +172,8 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
 
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
-    payload = {"text": msg_text, "format": "markdown"}
+    payload = {"text": msg_text, "format": "markdown",
+               "attachments": _manager_actions(user_id)}
 
     manager_max_id = None
     if client and client.get("manager_name"):
@@ -210,7 +220,8 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
     counterparty = (_lookup_client(text) or {}).get("name") or None
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
-    payload = {"text": msg_text, "format": "markdown"}
+    payload = {"text": msg_text, "format": "markdown",
+               "attachments": _manager_actions(user_id)}
 
     klo_id = get_klo_user_id()
     result = "no_klo"
@@ -244,7 +255,8 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
     counterparty = (_lookup_client(text) or {}).get("name") or None
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
-    payload = {"text": msg_text, "format": "markdown"}
+    payload = {"text": msg_text, "format": "markdown",
+               "attachments": _manager_actions(user_id)}
 
     sent_any = False
     for acc_id in (settings.ACCOUNTANT_USER_ID, settings.ACCOUNTANT2_USER_ID):
@@ -273,7 +285,8 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
     counterparty = (_lookup_client(text) or {}).get("name") or None
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
-    payload = {"text": msg_text, "format": "markdown"}
+    payload = {"text": msg_text, "format": "markdown",
+               "attachments": _manager_actions(user_id)}
 
     if settings.SALES_USER_ID:
         resp = send_message(settings.SALES_USER_ID, payload, trace_id)
@@ -299,7 +312,8 @@ def forward_unidentified_to_group(user_id: int, user_name: str, text: str,
         pass
 
     msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
-    payload = {"text": msg_text, "format": "markdown"}
+    payload = {"text": msg_text, "format": "markdown",
+               "attachments": _manager_actions(user_id)}
 
     reason = "клиент не указал ИНН/договор после 2 попыток"
     sent = _fallback_to_group(user_id, payload, reason, trace_id)

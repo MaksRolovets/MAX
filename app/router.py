@@ -496,6 +496,67 @@ STATE_CALLBACKS = {
 # ─── Обработка callback-ов ─────────────────────────────────────────
 
 
+def _handle_manager_action(update: dict, callback_id: str,
+                           payload: str, trace_id: str):
+    """Обработчик кнопок «Взял в работу» / «Решено» на карточке менеджера.
+
+    payload: mgr_ack:<client_user_id> | mgr_done:<client_user_id>
+    — клиенту шлём авто-уведомление,
+    — карточку менеджера обновляем: убираем нажатую кнопку и приписываем
+      статус с именем менеджера.
+    """
+    callback = update.get("callback", {})
+    sender = callback.get("sender") or callback.get("user") or {}
+    manager_name = (sender.get("name") or sender.get("first_name")
+                    or "Менеджер")
+
+    action, _, client_id_str = payload.partition(":")
+    try:
+        client_user_id = int(client_id_str)
+    except (TypeError, ValueError):
+        log_event("mgr_action_bad_payload", trace_id, payload=payload)
+        return
+
+    # Оригинальный текст карточки — чтобы при обновлении дописать статус,
+    # а не потерять форматированный блок с данными клиента.
+    orig_body = (update.get("message") or {}).get("body") or {}
+    orig_text = orig_body.get("text") or ""
+
+    if action == "mgr_ack":
+        try:
+            send_message(client_user_id, {
+                "text": "👨‍💼 Специалист взял ваш запрос в работу и скоро с Вами свяжется.",
+                "format": "markdown",
+            }, trace_id)
+        except Exception as e:
+            log_event("mgr_ack_client_error", trace_id, error=str(e))
+
+        new_text = orig_text + f"\n\n✅ В работе: {manager_name}"
+        # Кнопку «Взял» убираем, «Решено» оставляем.
+        rows = [[packaging_paid.btn_cb(
+            "✔️ Решено", f"mgr_done:{client_user_id}")]]
+        _answer(callback_id, new_text, rows, trace_id)
+        log_event("mgr_ack", trace_id,
+                  manager=manager_name, client_user_id=client_user_id)
+        return
+
+    if action == "mgr_done":
+        try:
+            send_message(client_user_id, {
+                "text": "✅ Ваш запрос закрыт. Если остались вопросы — просто напишите ещё раз.",
+                "format": "markdown",
+            }, trace_id)
+        except Exception as e:
+            log_event("mgr_done_client_error", trace_id, error=str(e))
+
+        new_text = orig_text + f"\n\n✔️ Решено: {manager_name}"
+        body = {"text": new_text, "format": "markdown", "attachments": []}
+        answer_callback(callback_id, {"message": body}, trace_id)
+        log_event("mgr_done", trace_id,
+                  manager=manager_name, client_user_id=client_user_id)
+        return
+
+
 def _handle_callback(update: dict, trace_id: str):
     callback = update.get("callback", {})
     callback_id = callback.get("callback_id")
@@ -517,6 +578,12 @@ def _handle_callback(update: dict, trace_id: str):
 
     if not callback_id:
         log_event("skip", trace_id, reason="no_callback_id")
+        return
+
+    # ── Действия менеджера над карточкой клиента («Взял в работу» / «Решено»)
+    # Идут ДО phone-gate'а: у менеджеров телефон обычно не сохранён.
+    if payload.startswith("mgr_ack:") or payload.startswith("mgr_done:"):
+        _handle_manager_action(update, callback_id, payload, trace_id)
         return
 
     # ── Гейт: если у пользователя нет телефона — просим поделиться ──
@@ -830,17 +897,40 @@ def _handle_text_message(update: dict, trace_id: str):
             _send(user_id, "⛔ У вас нет прав для этой команды.", trace_id=trace_id)
         return
 
-    # Проверяем, есть ли ответ менеджера (reply на сообщение бота)
-    link = message.get("link") or message.get("reply_to") or {}
-    linked_mid = link.get("mid") or link.get("message_id") or ""
+    # Проверяем, есть ли ответ менеджера (reply на сообщение бота).
+    # В MAX API mid исходного сообщения лежит в одном из двух мест:
+    #   1) message.link.message.mid  (link.type == "reply" | "forward")
+    #   2) message.body.reply_to     (строка — только для reply)
+    # См. max_schemes.go → LinkedMessage, MessageBody.
+    body = message.get("body") or {}
+    link = message.get("link") or {}
+    linked_msg = link.get("message") or {}
+    linked_mid = (
+        linked_msg.get("mid")
+        or body.get("reply_to")
+        or link.get("mid")              # на всякий — если API всё же пришлёт плоско
+        or ""
+    )
+    log_event("reply_check", trace_id,
+              user_id=user_id,
+              has_link=bool(link),
+              link_type=link.get("type", ""),
+              linked_mid=linked_mid,
+              body_reply_to=body.get("reply_to", ""))
     if linked_mid:
         try:
             client_info = find_client_by_message(str(linked_mid))
             if client_info and client_info.get("client_user_id"):
-                forward_manager_reply_to_client(client_info["client_user_id"], text, trace_id)
+                forward_manager_reply_to_client(
+                    client_info["client_user_id"], text, trace_id)
+                log_event("reply_forwarded", trace_id,
+                          linked_mid=linked_mid,
+                          client_user_id=client_info["client_user_id"])
                 return
-        except Exception:
-            pass
+            log_event("reply_map_miss", trace_id, linked_mid=linked_mid)
+        except Exception as e:
+            log_event("reply_lookup_error", trace_id,
+                      error=str(e), linked_mid=linked_mid)
 
     # Проверяем состояние пользователя
     try:
