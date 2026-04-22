@@ -169,6 +169,7 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
 
     client = _lookup_client(text)
     counterparty = (client or {}).get("name") or None
+    manager_name = (client or {}).get("manager_name") or ""
 
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
@@ -176,25 +177,40 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
                "attachments": _manager_actions(user_id)}
 
     manager_max_id = None
-    if client and client.get("manager_name"):
+    lookup_error = ""
+    if client and manager_name:
         try:
-            manager_max_id = find_manager_id(client["manager_name"])
-        except Exception:
-            pass
+            manager_max_id = find_manager_id(manager_name)
+        except Exception as e:
+            lookup_error = str(e)[:200]
+
+    # Детальная диагностика: ровно где потеряли маршрут
+    log_event("manager_resolve", trace_id,
+              user_id=user_id,
+              client_found=bool(client),
+              counterparty=counterparty or "",
+              manager_name=manager_name,
+              manager_max_id=manager_max_id,
+              lookup_error=lookup_error)
 
     result = "no_manager"
     if manager_max_id:
         resp = send_message(manager_max_id, payload, trace_id)
-        # Сохраняем связку для ответа менеджера
         msg_id, manager_chat_id = _parse_response(resp)
         if msg_id:
             save_message_map(str(msg_id), user_id,
                              manager_chat_id=str(manager_chat_id))
         result = "forwarded"
     else:
-        # Менеджер не найден (нет клиента в таблице или не указан) — уводим
-        # запрос в резервную группу, чтобы он не потерялся.
-        reason = "менеджер не найден по ИНН/договору"
+        # Подробная причина — пригодится в лог-группе и в логах.
+        if not client:
+            reason = "клиент не найден в таблице по ИНН/договору"
+        elif not manager_name:
+            reason = f"у клиента «{counterparty}» не указан менеджер продаж"
+        elif lookup_error:
+            reason = f"ошибка поиска MAX ID менеджера «{manager_name}»: {lookup_error}"
+        else:
+            reason = f"в таблице менеджеров нет MAX ID для «{manager_name}»"
         if _fallback_to_group(user_id, payload, reason, trace_id):
             result = "forwarded_group"
         else:
