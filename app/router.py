@@ -202,17 +202,21 @@ TEXT_TERMINATE_DIFFERENT_IDENT = (
 )
 TEXT_CONTACT_AFTER_IDENT = (
     "✅ Спасибо, ваш ИНН/договор найден.\n\n"
-    "Для связи менеджера с вами, пожалуйста, оставьте **контактный телефон** "
-    "или **e-mail** одним сообщением."
+    "Пожалуйста, одним сообщением укажите:\n"
+    "1) **Контактный телефон или e-mail** для связи;\n"
+    "2) Кратко — **суть вашего вопроса**, чтобы менеджер мог подготовиться."
 )
 TEXT_CONTACT_AFTER_IDENT_NOT_FOUND = (
     "Спасибо за уточнение данных ИНН/договора.\n\n"
-    "Для связи менеджера с вами, пожалуйста, оставьте **контактный телефон** "
-    "или **e-mail** одним сообщением."
+    "Пожалуйста, одним сообщением укажите:\n"
+    "1) **Контактный телефон или e-mail** для связи;\n"
+    "2) Кратко — **суть вашего вопроса**, чтобы менеджер мог подготовиться."
 )
 TEXT_CONTACT_RETRY = (
     "Без контактов менеджер не сможет с вами связаться, чтобы решить вопрос.\n\n"
-    "Пожалуйста, укажите **телефон** или **e-mail**."
+    "Пожалуйста, одним сообщением укажите:\n"
+    "1) **Телефон или e-mail**;\n"
+    "2) Кратко суть вопроса."
 )
 TEXT_CONTACT_FINAL = (
     "Вы не предоставили контакты для связи. К сожалению, я не могу передать заявку.\n\n"
@@ -655,6 +659,60 @@ STATE_CALLBACKS = {
 # Состояния, где применяется двухфазная идентификация ident → contact.
 # waiting_pro сюда не входит.
 IDENT_CONTACT_STATES = ("waiting_message", "waiting_klo", "waiting_buh")
+
+# ── Разделение присланного клиентом текста на контакт и комментарий ──
+
+_EMAIL_EXTRACT_RE = re.compile(r"[\w.+\-]+@[\w\-]+\.[a-zA-Z]{2,}")
+# Последовательность «телефонных» символов: +, цифры, скобки, дефисы,
+# пробелы. Требуем минимум 7 цифр.
+_PHONE_EXTRACT_RE = re.compile(r"(?:[+()\-\s\d]){7,}")
+# Строчные префиксы, которые часто пишут перед контактом: «тел.:», «email:»
+_CONTACT_PREFIX_RE = re.compile(
+    r"^\s*(?:тел(?:\.|ефон)?\s*[:.\-]?\s*|e-?mail\s*[:.\-]?\s*|почта\s*[:.\-]?\s*|контакт\s*[:.\-]?\s*)",
+    re.IGNORECASE,
+)
+
+
+def _extract_contact_and_comment(text: str) -> tuple[str, str]:
+    """Разделяет сообщение клиента на (contact, comment).
+
+    - Ищет e-mail и/или «телефонную» подстроку (7+ цифр со скобками/дефисами)
+    - Удаляет их из текста; то, что осталось, чистит от «тел.:»/«email:»
+      и знаков препинания по краям → это comment
+    - Возвращает пустую строку, если соответствующая часть не найдена
+    """
+    contacts: list[str] = []
+    remaining = text
+
+    for m in _EMAIL_EXTRACT_RE.findall(remaining):
+        contacts.append(m.strip())
+    remaining = _EMAIL_EXTRACT_RE.sub(" ", remaining)
+
+    phone_match = _PHONE_EXTRACT_RE.search(remaining)
+    if phone_match:
+        # Проверим, что внутри найденного куска реально 7+ цифр —
+        # иначе regex мог захватить просто знаки препинания.
+        raw = phone_match.group(0)
+        digits_only = re.sub(r"\D", "", raw)
+        if len(digits_only) >= 7:
+            contacts.append(re.sub(r"\s+", " ", raw).strip(" -"))
+            remaining = remaining[:phone_match.start()] + " " + remaining[phone_match.end():]
+
+    contact = ", ".join(c for c in contacts if c)
+
+    # Чистим оставшийся комментарий — убираем служебные ярлыки,
+    # оставшиеся без значения (т.к. значение уже унесли в contact).
+    comment = re.sub(r"\s+", " ", remaining).strip()
+    comment = _CONTACT_PREFIX_RE.sub("", comment).strip()
+    comment = re.sub(
+        r"\b(?:тел(?:\.|ефон)?|e-?mail|почта|контакт)\s*[:.\-]?\s*"
+        r"(?=[\s;,.]|$)",
+        " ",
+        comment,
+        flags=re.IGNORECASE,
+    )
+    comment = re.sub(r"\s+", " ", comment).strip(".,;:— -")
+    return contact, comment
 
 # ─── Обработка callback-ов ─────────────────────────────────────────
 
@@ -1372,7 +1430,19 @@ def _handle_text_message(update: dict, trace_id: str):
                                   error=str(e))
                     counterparty_name = (client_info or {}).get("name") or None
 
-                    forwarded = f"ИНН/Договор: {prev_ident}\nКонтакт: {text}"
+                    # Разделяем сообщение клиента на контакт и комментарий
+                    # — менеджеру приходит структурированно.
+                    contact_val, comment_val = _extract_contact_and_comment(text)
+                    fwd_lines = [f"ИНН/Договор: {prev_ident}"]
+                    if contact_val:
+                        fwd_lines.append(f"Контакт: {contact_val}")
+                    else:
+                        # regex в классификаторе сработал, но extract не нашёл —
+                        # подстрахуемся, отдав сырой текст как контакт.
+                        fwd_lines.append(f"Контакт: {text}")
+                    if comment_val:
+                        fwd_lines.append(f"Комментарий клиента: {comment_val}")
+                    forwarded = "\n".join(fwd_lines)
                     if cart_text:
                         forwarded = f"{cart_text}\n\n{forwarded}"
 
