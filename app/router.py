@@ -16,15 +16,17 @@ from app.sheets_phones import has_phone, save_phone
 from app.forwarding import (
     forward_to_manager, forward_to_klo, forward_to_accountant,
     forward_to_sales, forward_manager_reply_to_client,
-    forward_unidentified_to_group,
+    forward_new_client_to_group,
 )
 from app.sheets_clients import (
     update_manager_for_clients, update_manager_id,
+    find_client_by_inn, find_client_by_contract,
 )
 from app.ai_client import (
     ask_ai, parse_state_command, clear_conversation,
-    validate_client_data, append_conversation,
+    classify_ident_stage, classify_contact_stage, append_conversation,
 )
+from app.inn_parser import extract_data
 from app.klo_rotation import is_weekend
 
 # ─── Текстовые константы промптов (обновлено по скриншоту + новые правки) ────────────────────────────────
@@ -165,23 +167,59 @@ TEXT_REMEM_GMAIL = (
     "🔄 Мы передадим ваш запрос специалисту, и он скоро свяжется с вами."
 )
 
-TEXT_MISSING_BOTH = (
-    "К сожалению, я не смогу Вам помочь, так как не могу Вас идентифицировать. "
-    "Пожалуйста, укажите ИНН или номер договора, а также контакт для обратной "
-    "связи с Вами: телефон или e-mail"
+# ─── Двухфазная идентификация клиента (ИНН → контакт) ───────────
+
+TEXT_IDENTIFY_FIRST = (
+    "📝 Для передачи запроса менеджеру нам нужно идентифицировать вас как "
+    "клиента СДЭК.\n\n"
+    "Пожалуйста, укажите **ИНН вашей компании** или **номер договора** с нами."
 )
-TEXT_MISSING_IDENTIFIER = (
-    "📝 Пожалуйста, укажите Ваш ИНН или номер договора — без этого мы не сможем "
-    "Вас идентифицировать."
+TEXT_NO_INN_REFUSE = (
+    "К сожалению, этот бот обслуживает только клиентов СДЭК — "
+    "юридических лиц и ИП, у которых есть договор с нами.\n\n"
+    "Если вы физическое лицо, пожалуйста, обратитесь по номеру горячей линии "
+    "CDEK **+7 (495) 009 04 05**.\n\n"
+    "Если вы хотите заключить договор как ИП, юрлицо или самозанятый — "
+    "выберите в главном меню пункт «Заключить договор».\n\n"
+    "Без идентификации я не смогу передать ваш запрос менеджеру."
 )
-TEXT_MISSING_CONTACT = (
-    "📱 Пожалуйста, укажите контактный телефон или e-mail, по которому мы "
-    "сможем с Вами связаться."
+TEXT_PHYSICAL_REFUSE = (
+    "Извините, не смогу вам помочь.\n\n"
+    "Для физических лиц работает другой канал поддержки: "
+    "**+7 (495) 009 04 05**\n"
+    "https://www.cdek.ru/ru/contacts\n\n"
+    "Здесь мы помогаем только компаниям-партнёрам."
 )
-TEXT_NEED_CONTACT_ONLY = (
-    "📱 Нам всё же нужен **номер телефона или e-mail** для связи — иначе "
-    "менеджер не сможет с Вами связаться.\n\n"
-    "Пожалуйста, оставьте контакт одним сообщением."
+TEXT_INN_NOT_FOUND = (
+    "❗ Клиент с таким ИНН или номером договора не найден в нашей базе.\n\n"
+    "Пожалуйста, проверьте правильность данных и отправьте ИНН/договор ещё раз."
+)
+TEXT_TERMINATE_DIFFERENT_IDENT = (
+    "Вы указали разные ИНН/номера договора, и ни один из них не найден в нашей базе.\n\n"
+    "К сожалению, я не могу передать ваш запрос без корректной идентификации. "
+    "Если вы уверены, что работаете с нами, начните диалог заново и укажите точный "
+    "ИНН или номер договора."
+)
+TEXT_CONTACT_AFTER_IDENT = (
+    "✅ Спасибо, ваш ИНН/договор найден.\n\n"
+    "Для связи менеджера с вами, пожалуйста, оставьте **контактный телефон** "
+    "или **e-mail** одним сообщением."
+)
+TEXT_CONTACT_AFTER_IDENT_NOT_FOUND = (
+    "Спасибо за уточнение данных ИНН/договора.\n\n"
+    "Для связи менеджера с вами, пожалуйста, оставьте **контактный телефон** "
+    "или **e-mail** одним сообщением."
+)
+TEXT_CONTACT_RETRY = (
+    "Без контактов менеджер не сможет с вами связаться, чтобы решить вопрос.\n\n"
+    "Пожалуйста, укажите **телефон** или **e-mail**."
+)
+TEXT_CONTACT_FINAL = (
+    "Вы не предоставили контакты для связи. К сожалению, я не могу передать заявку.\n\n"
+    "Если передумаете, начните диалог заново. Спасибо за понимание."
+)
+TEXT_SUCCESS_FORWARDED = (
+    "✅ Спасибо! Мы передадим ваш запрос специалисту, и он скоро свяжется с вами."
 )
 
 TEXT_WEEKEND_AUTOREPLY = (
@@ -578,36 +616,45 @@ SIMPLE_CALLBACKS = {
 # ── Callbacks, которые устанавливают состояние и просят текст ──
 
 # Формат: callback_data → (state, topic, prompt_text)
+# Для всех waiting_message/waiting_klo/waiting_buh используем единый первый
+# шаг — запрос ИНН/договора. Далее флоу разбит на фазы ident → contact
+# в обработчике текста (см. _handle_text_message). waiting_pro оставлен
+# как есть: у новых клиентов ИНН в базе быть не может.
 STATE_CALLBACKS = {
-    # → waiting_message (пересылка менеджеру через ИНН-поиск)
-    "need_help_with_contact": ("waiting_message", "need_help_with_contact", TEXT_INTERNATIONAL),
-    "callback_request": ("waiting_message", "callback_request", TEXT_CALLBACK_REQUEST),
-    "feedback": ("waiting_message", "feedback", TEXT_FEEDBACK),
-    "contract_renewal": ("waiting_message", "contract_renewal", TEXT_CONTRACT_RENEWAL),
-    "new_services": ("waiting_message", "new_services", TEXT_NEW_SERVICES),
-    "tracking_help_yes": ("waiting_message", "tracking_help_yes", TEXT_REQUEST_UNIVERSAL),
-    "free_pckaiging_data": ("waiting_message", "free_pckaiging_data", TEXT_FREE_BOX),
+    # → waiting_message (пересылка закреплённому менеджеру через ИНН-поиск)
+    "need_help_with_contact": ("waiting_message", "need_help_with_contact", TEXT_IDENTIFY_FIRST),
+    "callback_request": ("waiting_message", "callback_request", TEXT_IDENTIFY_FIRST),
+    "feedback": ("waiting_message", "feedback", TEXT_IDENTIFY_FIRST),
+    "contract_renewal": ("waiting_message", "contract_renewal", TEXT_IDENTIFY_FIRST),
+    "new_services": ("waiting_message", "new_services", TEXT_IDENTIFY_FIRST),
+    "tracking_help_yes": ("waiting_message", "tracking_help_yes", TEXT_IDENTIFY_FIRST),
+    "free_pckaiging_data": ("waiting_message", "free_pckaiging_data", TEXT_IDENTIFY_FIRST),
     # → waiting_klo (пересылка в КЛО)
-    "request_klo": ("waiting_klo", "request_klo", TEXT_REQUEST_KLO),
-    "order_other": ("waiting_klo", "order_other", TEXT_ORDER_OTHER),
-    "need_help": ("waiting_klo", "order_edit", TEXT_REQUEST_ORDER_AND_INN),
-    "need_help_with_order": ("waiting_klo", "order_edit", TEXT_REQUEST_ORDER_AND_INN),
-    "need_help_cheking": ("waiting_klo", "order_date", TEXT_NEED_HELP_DATE_DELIVERY),
-    "tracking_solved_no": ("waiting_klo", "order_track", TEXT_TRACKING_NO),
+    "request_klo": ("waiting_klo", "request_klo", TEXT_IDENTIFY_FIRST),
+    "order_other": ("waiting_klo", "order_other", TEXT_IDENTIFY_FIRST),
+    "need_help": ("waiting_klo", "order_edit", TEXT_IDENTIFY_FIRST),
+    "need_help_with_order": ("waiting_klo", "order_edit", TEXT_IDENTIFY_FIRST),
+    "need_help_cheking": ("waiting_klo", "order_date", TEXT_IDENTIFY_FIRST),
+    "tracking_solved_no": ("waiting_klo", "order_track", TEXT_IDENTIFY_FIRST),
 
     # → waiting_buh (пересылка бухгалтеру)
-    "finance_invoice": ("waiting_buh", "finance_invoice", TEXT_FINANCE_INVOICE),
-    "finance_question": ("waiting_buh", "finance_question", TEXT_FINANCE_QUESTION),
-    "need_help_with_period": ("waiting_buh", "need_help_with_period", TEXT_FINANCE_PERIOD),
+    "finance_invoice": ("waiting_buh", "finance_invoice", TEXT_IDENTIFY_FIRST),
+    "finance_question": ("waiting_buh", "finance_question", TEXT_IDENTIFY_FIRST),
+    "need_help_with_period": ("waiting_buh", "need_help_with_period", TEXT_IDENTIFY_FIRST),
 
-    # → waiting_pro (продажнику — ТОЛЬКО заключение нового договора)
+    # → waiting_pro (продажнику — ТОЛЬКО заключение нового договора).
+    # Тут проверки по базе НЕТ — у нового клиента ИНН в базе и не должно быть.
     "contract": ("waiting_pro", "contract", TEXT_CONTRACT),
 
     # → waiting_message (закреплённый менеджер по ИНН): ЛК-вопросы
     # существующих клиентов — восстановление доступа и обучение.
-    "need_help_manager": ("waiting_message", "need_help_manager", TEXT_HELP_MANAGER),
-    "remem_gmail": ("waiting_message", "remem_gmail", TEXT_REMEM_GMAIL),
+    "need_help_manager": ("waiting_message", "need_help_manager", TEXT_IDENTIFY_FIRST),
+    "remem_gmail": ("waiting_message", "remem_gmail", TEXT_IDENTIFY_FIRST),
 }
+
+# Состояния, где применяется двухфазная идентификация ident → contact.
+# waiting_pro сюда не входит.
+IDENT_CONTACT_STATES = ("waiting_message", "waiting_klo", "waiting_buh")
 
 # ─── Обработка callback-ов ─────────────────────────────────────────
 
@@ -769,12 +816,19 @@ def _handle_callback(update: dict, trace_id: str):
         _answer(callback_id, text, rows, trace_id)
         return
 
-    # 3) Callback-формы (режим ожидания ввода)
+    # 3) Callback-формы (режим ожидания ввода).
+    # Для waiting_message/waiting_klo/waiting_buh сразу стартуем с фазы ident
+    # (manager_id="ident"), чтобы обработчик текста знал, где мы находимся.
+    # waiting_pro — старый флоу, фаз нет.
     if payload in STATE_CALLBACKS:
         state, topic, prompt_text = STATE_CALLBACKS[payload]
         if user_id is not None:
             try:
-                set_state(user_id, state, topic=topic)
+                if state in IDENT_CONTACT_STATES:
+                    set_state(user_id, state, topic=topic,
+                              manager_id="ident", order_number="0", inn="")
+                else:
+                    set_state(user_id, state, topic=topic)
             except Exception as e:
                 log_event("set_state_error", trace_id, error=str(e), payload=payload)
         else:
@@ -897,16 +951,19 @@ def _handle_callback(update: dict, trace_id: str):
         return
 
     if payload == "checkout":
-        # Корзина → оформление: формируем текст корзины, просим ИНН
+        # Корзина → оформление: формируем текст корзины, просим ИНН (фаза ident).
+        # Текст корзины сохраняем в comment с префиксом `cart:`, чтобы отличать
+        # его от флага `from_ai`. В фазе contact подхватим обратно.
         uid = user_id if user_id is not None else 0
         if user_id is None:
             log_event("callback_no_user_id", trace_id, payload=payload)
         cart_text, _ = packaging_paid.view_cart(uid)
         if user_id is not None:
-            set_state(user_id, "waiting_klo", topic="checkout", comment=cart_text)
-        text = "📝 Укажите в сообщении номер Вашего ИНН или договора, контактный телефон или e-mail по которому мы сможем с Вами связаться."
+            set_state(user_id, "waiting_klo", topic="checkout",
+                      comment=f"cart:{cart_text}", manager_id="ident",
+                      order_number="0", inn="")
         rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
-        _answer(callback_id, text, rows, trace_id)
+        _answer(callback_id, TEXT_IDENTIFY_FIRST, rows, trace_id)
         return
 
     if payload == "noop":
@@ -1114,12 +1171,23 @@ def _handle_text_message(update: dict, trace_id: str):
             if ai_state and ai_topic:
                 # AI решил передать запрос сотруднику — выходим из ai_mode.
                 # Помечаем comment="from_ai", чтобы после пересылки вернуть в ai_mode.
-                # Триггерное сообщение кладём в inn как начальный аккумулятор —
-                # если клиент уже дал ИНН/контакт в разговоре с ИИ, они
-                # подхватятся валидатором при следующем сообщении.
-                set_state(user_id, ai_state, topic=ai_topic,
-                          comment="from_ai", inn=text)
-                _send(user_id, clean_text, trace_id=trace_id)
+                # Сбрасываем фазу двухфазной идентификации к ident с чистыми
+                # счётчиком и накопителем ИНН — бот сам дальше спросит ИНН
+                # и контакт через TEXT_IDENTIFY_FIRST. waiting_pro проверку
+                # в базе не делает, но для единообразия тоже сбрасываем.
+                if ai_state in IDENT_CONTACT_STATES:
+                    set_state(user_id, ai_state, topic=ai_topic,
+                              comment="from_ai",
+                              manager_id="ident", order_number="0", inn="")
+                else:
+                    set_state(user_id, ai_state, topic=ai_topic,
+                              comment="from_ai")
+                # Если AI сам не попросил ИНН — добавляем единый запрос
+                # от бота (шаг 1 спецификации).
+                msg = clean_text.strip()
+                if ai_state in IDENT_CONTACT_STATES and "ИНН" not in msg.upper():
+                    msg = f"{msg}\n\n{TEXT_IDENTIFY_FIRST}" if msg else TEXT_IDENTIFY_FIRST
+                _send(user_id, msg, trace_id=trace_id)
             else:
                 # Обычный ответ AI — кнопка завершения всегда внизу
                 rows = _ai_mode_rows()
@@ -1127,110 +1195,239 @@ def _handle_text_message(update: dict, trace_id: str):
             return
 
         # ── Обычные состояния: пересылка ──
+        # comment хранит:
+        #   - "from_ai"       — клиент пришёл из AI-режима (после пересылки вернуть)
+        #   - "cart:<text>"   — для checkout в waiting_klo хранит текст корзины
+        #   - ""              — обычный заход по кнопке
         from_ai = prev_comment == "from_ai"
+        cart_text = prev_comment[5:] if prev_comment.startswith("cart:") else ""
 
-        # Проверка: есть ли в сообщении ИНН/договор и контакт (телефон/e-mail).
-        # Первая неудачная попытка — просим дозаполнить. Вторая — уводим
-        # запрос в резервную группу с пометкой «не смог идентифицироваться».
-        if state in ("waiting_message", "waiting_klo", "waiting_buh", "waiting_pro"):
-            # Накапливаем текст между попытками — чтобы ИНН из первого
-            # сообщения не «забывался», когда клиент присылает контакт
-            # отдельной репликой. Храним в свободном поле `inn`.
-            prev_accum = (state_data.get("inn") or "").strip()
-            combined_text = f"{prev_accum}\n{text}" if prev_accum else text
+        menu_rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
 
-            validation = validate_client_data(combined_text, trace_id)
-            missing = validation["missing"]
-            if missing:
-                # Счётчик попыток храним в поле order_number таблицы состояний
-                # (в этих флоу оно не используется под свои нужды).
-                try:
-                    retry_count = int(state_data.get("order_number") or "0")
-                except (TypeError, ValueError):
-                    retry_count = 0
-                retry_count += 1
+        # waiting_pro (Заключить договор) — БЕЗ проверки по базе.
+        # У нового клиента ИНН в клиентской таблице быть не должно.
+        # Просто принимаем текст и отправляем продажнику.
+        if state == "waiting_pro":
+            clear_state(user_id)
+            if is_weekend():
+                log_event("weekend_autoreply", trace_id,
+                          user_id=user_id, state=state, topic=topic)
+                _send(user_id, TEXT_WEEKEND_AUTOREPLY, menu_rows, trace_id)
+                return
+            forward_to_sales(user_id, user_name, text, topic, trace_id)
+            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id,
+                                          topic, client_text=text)
+            return
 
-                log_event("client_data_incomplete", trace_id,
-                          user_id=user_id, state=state, topic=topic,
-                          missing=",".join(missing), retry=retry_count)
+        # Двухфазная идентификация: ident → contact (или contact_escalate).
+        if state in IDENT_CONTACT_STATES:
+            phase = (state_data.get("manager_id") or "ident").strip() or "ident"
+            try:
+                retry = int(state_data.get("order_number") or "0")
+            except (TypeError, ValueError):
+                retry = 0
+            prev_ident = (state_data.get("inn") or "").strip()
 
-                if retry_count >= 3:
-                    # Третья попытка — клиент так и не указал данные.
-                    # Уводим весь накопленный текст в резервную группу.
+            # ── Фаза ident: ждём ИНН/договор ──
+            if phase == "ident":
+                data = extract_data(text)
+                inn_val = (data.get("inn") or "").strip()
+                contract_val = (data.get("contract") or "").strip()
+                ident_val = inn_val or contract_val
+
+                if ident_val:
+                    client = None
+                    try:
+                        if inn_val:
+                            client = find_client_by_inn(inn_val)
+                        elif contract_val:
+                            client = find_client_by_contract(contract_val)
+                    except Exception as e:
+                        log_event("client_lookup_error", trace_id, error=str(e))
+
+                    if client:
+                        # Нашли клиента — переходим к сбору контакта.
+                        try:
+                            set_state(user_id, state, topic=topic,
+                                      comment=prev_comment,
+                                      manager_id="contact",
+                                      order_number="0",
+                                      inn=ident_val)
+                        except Exception as e:
+                            log_event("set_state_error", trace_id, error=str(e))
+                        log_event("ident_found", trace_id,
+                                  user_id=user_id, state=state, topic=topic,
+                                  ident=ident_val,
+                                  manager_name=client.get("manager_name", ""))
+                        _send(user_id, TEXT_CONTACT_AFTER_IDENT, menu_rows, trace_id)
+                        return
+
+                    # Ident есть, но в базе не найден.
+                    if prev_ident and prev_ident == ident_val:
+                        # Повтор того же значения — возможно новый клиент.
+                        # Переходим к сбору контакта для общего чата.
+                        try:
+                            set_state(user_id, state, topic=topic,
+                                      comment=prev_comment,
+                                      manager_id="contact_escalate",
+                                      order_number="0",
+                                      inn=ident_val)
+                        except Exception as e:
+                            log_event("set_state_error", trace_id, error=str(e))
+                        log_event("ident_repeat_not_found", trace_id,
+                                  user_id=user_id, state=state, topic=topic,
+                                  ident=ident_val)
+                        _send(user_id, TEXT_CONTACT_AFTER_IDENT_NOT_FOUND,
+                              menu_rows, trace_id)
+                        return
+
+                    if prev_ident and prev_ident != ident_val:
+                        # Клиент прислал другой ИНН/договор и снова не найден.
+                        clear_state(user_id)
+                        log_event("ident_terminated_different", trace_id,
+                                  user_id=user_id, state=state, topic=topic,
+                                  prev_ident=prev_ident, new_ident=ident_val)
+                        _send(user_id, TEXT_TERMINATE_DIFFERENT_IDENT,
+                              menu_rows, trace_id)
+                        return
+
+                    # Первый ввод, не найден — просим проверить.
+                    try:
+                        set_state(user_id, state, topic=topic,
+                                  comment=prev_comment,
+                                  manager_id="ident",
+                                  order_number="1",
+                                  inn=ident_val)
+                    except Exception as e:
+                        log_event("set_state_error", trace_id, error=str(e))
+                    log_event("ident_not_found_first", trace_id,
+                              user_id=user_id, state=state, topic=topic,
+                              ident=ident_val)
+                    _send(user_id, TEXT_INN_NOT_FOUND, menu_rows, trace_id)
+                    return
+
+                # В тексте нет цифр ИНН/номера договора — смотрим,
+                # что именно клиент написал: физлицо / нет ИНН / шум.
+                cls = classify_ident_stage(text, trace_id)
+                category = cls.get("category", "normal")
+
+                if category == "physical_person":
                     clear_state(user_id)
-                    forward_unidentified_to_group(user_id, user_name,
-                                                   combined_text, topic, trace_id)
+                    log_event("ident_physical_person", trace_id,
+                              user_id=user_id, state=state, topic=topic)
+                    _send(user_id, TEXT_PHYSICAL_REFUSE, menu_rows, trace_id)
+                    return
+
+                if category == "no_identifier":
+                    clear_state(user_id)
+                    log_event("ident_no_identifier", trace_id,
+                              user_id=user_id, state=state, topic=topic)
+                    _send(user_id, TEXT_NO_INN_REFUSE, menu_rows, trace_id)
+                    return
+
+                # normal — просто невалидный ответ, переспросим.
+                # Два таких подряд — обрыв.
+                retry += 1
+                if retry >= 2:
+                    clear_state(user_id)
+                    log_event("ident_terminated_silence", trace_id,
+                              user_id=user_id, state=state, topic=topic,
+                              retry=retry)
+                    _send(user_id, TEXT_TERMINATE_DIFFERENT_IDENT,
+                          menu_rows, trace_id)
+                    return
+                try:
+                    set_state(user_id, state, topic=topic,
+                              comment=prev_comment,
+                              manager_id="ident",
+                              order_number=str(retry),
+                              inn=prev_ident)
+                except Exception as e:
+                    log_event("set_state_error", trace_id, error=str(e))
+                log_event("ident_retry", trace_id,
+                          user_id=user_id, state=state, topic=topic,
+                          retry=retry)
+                _send(user_id, TEXT_IDENTIFY_FIRST, menu_rows, trace_id)
+                return
+
+            # ── Фаза contact / contact_escalate: ждём контакт ──
+            if phase in ("contact", "contact_escalate"):
+                cls = classify_contact_stage(text, trace_id)
+
+                if cls.get("has_contact"):
+                    # Собрали всё — пересылаем по целевому каналу.
+                    forwarded = f"ИНН/Договор: {prev_ident}\nКонтакт: {text}"
+                    if cart_text:
+                        forwarded = f"{cart_text}\n\n{forwarded}"
+
+                    clear_state(user_id)
+
+                    # Выходные — автоответ (КЛО работает, остальные — нет).
+                    if is_weekend() and state in ("waiting_message", "waiting_buh"):
+                        log_event("weekend_autoreply", trace_id,
+                                  user_id=user_id, state=state, topic=topic)
+                        _send(user_id, TEXT_WEEKEND_AUTOREPLY, menu_rows, trace_id)
+                        return
+
+                    if phase == "contact_escalate":
+                        # ИНН клиентом подтверждён, но в базе нет — в общий чат.
+                        forward_new_client_to_group(user_id, user_name,
+                                                     forwarded, topic, trace_id)
+                    elif state == "waiting_message":
+                        forward_to_manager(user_id, user_name,
+                                           forwarded, topic, trace_id)
+                    elif state == "waiting_klo":
+                        forward_to_klo(user_id, user_name,
+                                       forwarded, topic, trace_id)
+                        if topic == "checkout":
+                            try:
+                                packaging_paid.clear_cart(user_id)
+                            except Exception:
+                                pass
+                    elif state == "waiting_buh":
+                        forward_to_accountant(user_id, user_name,
+                                              forwarded, topic, trace_id)
+
                     _confirm_and_maybe_return_ai(user_id, from_ai, trace_id,
                                                   topic, client_text=text)
                     return
 
-                # Формулировку выбираем по тому, чего реально не хватает
-                # (с учётом накопленных данных), а не по номеру попытки.
-                if retry_count >= 2:
-                    # Последний шанс — мягче, но всё равно про недостающее.
-                    msg = TEXT_NEED_CONTACT_ONLY if "contact" in missing \
-                        else TEXT_MISSING_IDENTIFIER
-                elif "identifier" in missing and "contact" in missing:
-                    msg = TEXT_MISSING_BOTH
-                elif "identifier" in missing:
-                    msg = TEXT_MISSING_IDENTIFIER
-                else:
-                    msg = TEXT_MISSING_CONTACT
-                rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
+                # Контакт не прислали: явный отказ ИЛИ просто не по теме.
+                retry += 1
+                if cls.get("refuses_contact") or retry >= 3:
+                    clear_state(user_id)
+                    log_event("contact_terminated", trace_id,
+                              user_id=user_id, state=state, topic=topic,
+                              phase=phase, retry=retry,
+                              refused=bool(cls.get("refuses_contact")))
+                    _send(user_id, TEXT_CONTACT_FINAL, menu_rows, trace_id)
+                    return
+
                 try:
                     set_state(user_id, state, topic=topic,
                               comment=prev_comment,
-                              order_number=str(retry_count),
-                              inn=combined_text)
+                              manager_id=phase,
+                              order_number=str(retry),
+                              inn=prev_ident)
                 except Exception as e:
                     log_event("set_state_error", trace_id, error=str(e))
-                _send(user_id, msg, rows, trace_id)
+                log_event("contact_retry", trace_id,
+                          user_id=user_id, state=state, topic=topic,
+                          phase=phase, retry=retry)
+                _send(user_id, TEXT_CONTACT_RETRY, menu_rows, trace_id)
                 return
 
-            # Валидация прошла — пересылаем сотруднику весь накопленный
-            # текст, чтобы ИНН+контакт из разных сообщений ушли вместе.
-            text = combined_text
-
-        clear_state(user_id)
-
-        # На выходных не-КЛО запросы (менеджер/бухгалтер/продажник) не
-        # пересылаем — отправляем клиенту автоответ. Запросы в КЛО уходят
-        # дежурному автоматически через get_klo_user_id().
-        if is_weekend() and state in ("waiting_message", "waiting_buh", "waiting_pro"):
-            log_event("weekend_autoreply", trace_id,
-                      user_id=user_id, state=state, topic=topic)
-            rows = [[packaging_paid.btn_cb("◀️ В главное меню", "main_menu")]]
-            _send(user_id, TEXT_WEEKEND_AUTOREPLY, rows, trace_id)
+            # Неизвестная фаза — сбрасываем в ident и начинаем заново.
+            log_event("phase_reset", trace_id,
+                      user_id=user_id, state=state, phase=phase)
+            try:
+                set_state(user_id, state, topic=topic,
+                          comment=prev_comment,
+                          manager_id="ident", order_number="0", inn="")
+            except Exception:
+                pass
+            _send(user_id, TEXT_IDENTIFY_FIRST, menu_rows, trace_id)
             return
-
-        if state == "waiting_message":
-            forward_to_manager(user_id, user_name, text, topic, trace_id)
-            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic, client_text=text)
-            return
-
-        if state == "waiting_klo":
-            # Если это checkout — добавляем текст корзины
-            full_text = text
-            if topic == "checkout" and prev_comment:
-                full_text = f"{prev_comment}\n\nИНН/Договор: {text}"
-            forward_to_klo(user_id, user_name, full_text, topic, trace_id)
-            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic, client_text=text)
-            # Если это checkout — очищаем корзину
-            if topic == "checkout":
-                try:
-                    packaging_paid.clear_cart(user_id)
-                except Exception:
-                    pass
-            return
-
-        if state == "waiting_buh":
-            forward_to_accountant(user_id, user_name, text, topic, trace_id)
-            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic, client_text=text)
-            return
-
-        if state == "waiting_pro":
-            forward_to_sales(user_id, user_name, text, topic, trace_id)
-            _confirm_and_maybe_return_ai(user_id, from_ai, trace_id, topic, client_text=text)
             return
 
     # Нет состояния и не команда → показываем главное меню

@@ -315,9 +315,11 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
         _fallback_to_group(user_id, payload, "продажник не настроен", trace_id)
 
 
-def forward_unidentified_to_group(user_id: int, user_name: str, text: str,
-                                   topic: str, trace_id: str | None = None) -> bool:
-    """Клиент не смог указать ИНН/договор+контакт — уводим в резервную группу.
+def forward_new_client_to_group(user_id: int, user_name: str, text: str,
+                                 topic: str, trace_id: str | None = None) -> bool:
+    """Клиент подтвердил ИНН/договор (повторил то же значение), но его нет
+    в базе — возможно, это новый клиент, которого ещё не внесли. Уводим
+    запрос в резервную группу, чтобы дежурные разобрались.
 
     Возвращает True, если группа настроена и сообщение ушло.
     """
@@ -331,14 +333,14 @@ def forward_unidentified_to_group(user_id: int, user_name: str, text: str,
     payload = {"text": msg_text, "format": "markdown",
                "attachments": _manager_actions(user_id)}
 
-    reason = "клиент не указал ИНН/договор после 2 попыток"
+    reason = "ИНН/договор подтверждён клиентом, но в базе не найден (возможно новый клиент)"
     sent = _fallback_to_group(user_id, payload, reason, trace_id)
     if not sent:
-        log_event("unidentified_not_sent", trace_id, user_id=user_id, topic=topic)
+        log_event("new_client_not_sent", trace_id, user_id=user_id, topic=topic)
 
     try:
         log_request(user_id, topic,
-                    result="unidentified_group" if sent else "unidentified_lost",
+                    result="new_client_group" if sent else "new_client_lost",
                     comment=text[:200])
     except Exception:
         pass

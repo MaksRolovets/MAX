@@ -34,15 +34,21 @@ _STATE_INSTRUCTION = """
 
 Где ТЕМА — краткое название темы латиницей (например: contract_renewal, order_track, feedback).
 
+КРИТИЧЕСКИ ВАЖНО — ТЫ НЕ ПРОСИШЬ ИНН И КОНТАКТ САМ:
+После того как ты поставил тег [SET_STATE:...], бот автоматически САМ спросит у клиента
+сначала ИНН/договор, потом (если клиент найден в базе) — контакт. Поэтому в сообщении
+с тегом НЕ проси ИНН/договор/телефон/e-mail. Просто скажи коротко: «Хорошо, передам ваш
+запрос специалисту» — и ставь тег. Бот всё остальное соберёт сам.
+
+Пример правильного сообщения с тегом:
+"Хорошо, я передам ваш запрос менеджеру. [SET_STATE:waiting_message:callback_request]"
+
+Пример НЕПРАВИЛЬНОГО (так делать НЕЛЬЗЯ):
+"Укажите ваш ИНН и телефон, я передам менеджеру. [SET_STATE:...]" ← НЕ ПРОСИ ДАННЫЕ САМ.
+
 КОГДА СТАВИТЬ ТЕГ:
-Ставь тег ТОЛЬКО когда ты ПРОСИШЬ клиента указать данные (ИНН, договор, номер заказа и т.д.),
-которые будут переданы сотруднику. Следующее сообщение клиента после тега будет автоматически
-переслано нужному сотруднику.
-
-Пример — ты ещё НЕ собрал данные:
-"Хорошо, я передам ваш запрос менеджеру. Пожалуйста, укажите в сообщении номер Вашего ИНН или договора, а также номер контактного телефона или e-mail, по которому мы сможем с Вами связаться. [SET_STATE:waiting_message:callback_request]"
-
-ВАЖНО: когда просишь данные перед передачей сотруднику, ВСЕГДА запрашивай ОБЕ части: (1) ИНН или номер договора И (2) номер контактного телефона или e-mail. Не ограничивайся только ИНН — без контакта запрос валидатор не пропустит.
+Ставь тег как только ты понял, что вопрос требует передачи сотруднику и клиент согласен.
+Сразу, одним сообщением — без просьбы прислать ИНН/контакт.
 
 КОГДА НЕ СТАВИТЬ ТЕГ:
 - Если ты просто отвечаешь на вопрос или ведёшь диалог — НЕ ставь тег.
@@ -133,43 +139,11 @@ def append_conversation(user_id: int, role: str, content: str) -> None:
         _conversations[user_id] = _conversations[user_id][-MAX_HISTORY:]
 
 
-def validate_client_data(text: str, trace_id: str | None = None) -> dict:
-    """AI-анализатор сообщения клиента: есть ли ИНН/договор и контактный телефон/e-mail.
-
-    Returns:
-        {
-            "has_identifier": bool,   # ИНН или номер договора
-            "has_contact": bool,      # телефон или e-mail
-            "missing": list[str],     # "identifier" и/или "contact"
-        }
-
-    Если AI недоступен — считаем данные валидными (пересылаем сотруднику),
-    чтобы не блокировать клиентов при сбое нейронки.
-    """
-    ai = _ai_validate(text, trace_id) if settings.OPENROUTER_API_KEY else None
-
-    if ai is None:
-        log_event("validate_client_data_fallback", trace_id, user_text=text[:150])
-        return {"has_identifier": True, "has_contact": True, "missing": []}
-
-    has_identifier = bool(ai.get("has_identifier", False))
-    has_contact = bool(ai.get("has_contact", False))
-
-    missing: list[str] = []
-    if not has_identifier:
-        missing.append("identifier")
-    if not has_contact:
-        missing.append("contact")
-
-    return {
-        "has_identifier": has_identifier,
-        "has_contact": has_contact,
-        "missing": missing,
-    }
-
-
-def _ai_validate(text: str, trace_id: str | None = None) -> dict | None:
-    """AI-валидатор: просим модель вернуть JSON с двумя булевыми флагами."""
+def _call_classifier(prompt: str, trace_id: str | None = None,
+                     event_name: str = "ai_classify") -> dict | None:
+    """Универсальный вызов модели с JSON-ответом. None при ошибке."""
+    if not settings.OPENROUTER_API_KEY:
+        return None
     try:
         resp = requests.post(
             f"{settings.OPENROUTER_BASE_URL}/chat/completions",
@@ -179,46 +153,116 @@ def _ai_validate(text: str, trace_id: str | None = None) -> dict | None:
             },
             json={
                 "model": settings.OPENROUTER_MODEL,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        "Ты строгий анализатор сообщений. Проверь, указал ли "
-                        "клиент В САМОМ ТЕКСТЕ конкретные данные.\n\n"
-                        "has_identifier = true ТОЛЬКО если в сообщении "
-                        "присутствуют фактические ЦИФРЫ ИНН (10 или 12 цифр "
-                        "подряд) ИЛИ номер договора (последовательность цифр "
-                        "или буквенно-цифровой код).\n"
-                        "Упоминание слова «ИНН» или «договор» без цифр — "
-                        "НЕ считается! Фразы «нет ИНН», «не помню ИНН», "
-                        "«У меня нет ИНН», «вопрос по договору», «какой у "
-                        "меня ИНН» → has_identifier = false.\n\n"
-                        "has_contact = true ТОЛЬКО если в сообщении есть "
-                        "фактический номер телефона (цифры) или e-mail "
-                        "(адрес вида x@y.z). Слова «телефон», «почта» без "
-                        "самого значения — НЕ считаются.\n\n"
-                        f"Сообщение клиента: «{text}»\n\n"
-                        "Ответь СТРОГО одним JSON без markdown-блоков "
-                        "и без пояснений:\n"
-                        '{"has_identifier": false, "has_contact": false}'
-                    ),
-                }],
-                "max_tokens": 60,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 80,
                 "temperature": 0,
             },
             timeout=10,
         )
         resp.raise_for_status()
         answer = resp.json()["choices"][0]["message"]["content"].strip()
-        log_event("validate_client_data_ai", trace_id, answer=answer[:150])
         answer = re.sub(r"```(?:json)?|```", "", answer).strip()
-        data = json.loads(answer)
-        return {
-            "has_identifier": bool(data.get("has_identifier", False)),
-            "has_contact": bool(data.get("has_contact", False)),
-        }
+        log_event(event_name, trace_id, answer=answer[:200])
+        return json.loads(answer)
     except Exception as e:
-        log_event("validate_client_data_ai_error", trace_id, error=str(e)[:200])
+        log_event(f"{event_name}_error", trace_id, error=str(e)[:200])
         return None
+
+
+def classify_ident_stage(text: str, trace_id: str | None = None) -> dict:
+    """Фаза идентификации: что клиент прислал в ответ на запрос ИНН/договора.
+
+    Returns:
+        {
+            "has_identifier": bool,   # в тексте есть ИНН (10/12 цифр) или номер договора
+            "category": "physical_person" | "no_identifier" | "normal",
+        }
+
+    category:
+      - "physical_person" — клиент явно сказал, что он физлицо / у него нет ИП/ООО
+        / нет бизнеса / нет договора. Бот отказывает и даёт горячую линию.
+      - "no_identifier" — клиент сказал, что ИНН/договора нет или не помнит,
+        без явного указания физлица. Бот предлагает «Заключить договор»
+        и закрывает диалог.
+      - "normal" — либо клиент прислал ИНН/договор, либо просто прислал
+        невнятный/пустой текст (бот переспросит).
+
+    При недоступности AI — безопасный дефолт: has_identifier=False, category="normal"
+    (бот переспросит, не терминирует диалог ошибочно).
+    """
+    prompt = (
+        "Ты классификатор сообщения клиента, который в ответ на просьбу "
+        "указать ИНН или номер договора прислал текст.\n\n"
+        "Верни JSON с двумя полями:\n"
+        "1) has_identifier (bool):\n"
+        "   true ТОЛЬКО если в сообщении есть фактические цифры ИНН "
+        "(10 или 12 цифр подряд) ИЛИ номер договора (буквенно-цифровой код "
+        "вроде IM-DLP4-215, ИМ91231255297, SZ-LBS2-21, ДЛП-123 и т.п.).\n"
+        "   Упоминание слова «ИНН» или «договор» без самих цифр — false.\n\n"
+        "2) category: одно из «physical_person» | «no_identifier» | «normal»:\n"
+        "   - «physical_person» — клиент явно пишет, что он физлицо, "
+        "физическое лицо, у него нет ИП, нет ООО, нет юрлица, нет бизнеса, "
+        "не самозанятый, «я обычный человек», «у меня нет договора с вами».\n"
+        "   - «no_identifier» — клиент пишет, что ИНН/договора нет, не помнит, "
+        "не знает, «не могу найти», БЕЗ явного указания, что он физлицо.\n"
+        "   - «normal» — любой другой случай, включая когда клиент прислал "
+        "ИНН/договор, или прислал что-то невнятное/не по теме.\n\n"
+        f"Сообщение клиента: «{text}»\n\n"
+        "Ответь СТРОГО одним JSON без markdown:\n"
+        '{"has_identifier": false, "category": "normal"}'
+    )
+    ai = _call_classifier(prompt, trace_id, event_name="classify_ident")
+    if ai is None:
+        log_event("classify_ident_fallback", trace_id, user_text=text[:150])
+        return {"has_identifier": False, "category": "normal"}
+    cat = ai.get("category", "normal")
+    if cat not in ("physical_person", "no_identifier", "normal"):
+        cat = "normal"
+    return {
+        "has_identifier": bool(ai.get("has_identifier", False)),
+        "category": cat,
+    }
+
+
+def classify_contact_stage(text: str, trace_id: str | None = None) -> dict:
+    """Фаза контакта: прислал ли клиент телефон/e-mail или отказался.
+
+    Returns:
+        {
+            "has_contact": bool,      # в тексте есть номер телефона или e-mail
+            "refuses_contact": bool,  # клиент явно отказался давать контакт
+        }
+
+    При недоступности AI — считаем has_contact=False, refuses_contact=False
+    (бот переспросит один раз, если контакт так и не дадут — сработает
+    локальный счётчик попыток).
+    """
+    prompt = (
+        "Ты классификатор сообщения клиента, которого только что попросили "
+        "прислать контактный телефон или e-mail.\n\n"
+        "Верни JSON с двумя полями:\n"
+        "1) has_contact (bool):\n"
+        "   true ТОЛЬКО если в сообщении есть фактический номер телефона "
+        "(минимум 7 цифр подряд, возможно со скобками/дефисами/+) ИЛИ e-mail "
+        "(адрес вида x@y.z).\n"
+        "   Слова «телефон», «почта» без самого значения — false.\n\n"
+        "2) refuses_contact (bool):\n"
+        "   true если клиент ЯВНО отказался: «нет телефона», «не хочу давать», "
+        "«не дам», «зачем вам», «никакого номера», «ничего не дам», "
+        "«почта не нужна», «давайте без этого». Иначе false.\n"
+        "   Если клиент просто написал что-то не по теме без явного отказа — false.\n\n"
+        f"Сообщение клиента: «{text}»\n\n"
+        "Ответь СТРОГО одним JSON без markdown:\n"
+        '{"has_contact": false, "refuses_contact": false}'
+    )
+    ai = _call_classifier(prompt, trace_id, event_name="classify_contact")
+    if ai is None:
+        log_event("classify_contact_fallback", trace_id, user_text=text[:150])
+        return {"has_contact": False, "refuses_contact": False}
+    return {
+        "has_contact": bool(ai.get("has_contact", False)),
+        "refuses_contact": bool(ai.get("refuses_contact", False)),
+    }
 
 
 def parse_state_command(ai_response: str) -> tuple[str, str | None, str | None]:
