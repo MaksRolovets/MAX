@@ -1356,6 +1356,22 @@ def _handle_text_message(update: dict, trace_id: str):
 
                 if cls.get("has_contact"):
                     # Собрали всё — пересылаем по целевому каналу.
+                    # Находим клиента по подтверждённому prev_ident, чтобы
+                    # передать имя контрагента явно — не полагаясь на повторный
+                    # парсинг текста в forwarding.py.
+                    client_info = None
+                    try:
+                        if prev_ident.isdigit() and len(prev_ident) in (10, 12):
+                            client_info = find_client_by_inn(prev_ident)
+                        else:
+                            client_info = find_client_by_contract(prev_ident)
+                            if not client_info and prev_ident.isdigit():
+                                client_info = find_client_by_inn(prev_ident)
+                    except Exception as e:
+                        log_event("client_lookup_on_send_error", trace_id,
+                                  error=str(e))
+                    counterparty_name = (client_info or {}).get("name") or None
+
                     forwarded = f"ИНН/Договор: {prev_ident}\nКонтакт: {text}"
                     if cart_text:
                         forwarded = f"{cart_text}\n\n{forwarded}"
@@ -1372,13 +1388,16 @@ def _handle_text_message(update: dict, trace_id: str):
                     if phase == "contact_escalate":
                         # ИНН клиентом подтверждён, но в базе нет — в общий чат.
                         forward_new_client_to_group(user_id, user_name,
-                                                     forwarded, topic, trace_id)
+                                                     forwarded, topic, trace_id,
+                                                     counterparty=counterparty_name)
                     elif state == "waiting_message":
                         forward_to_manager(user_id, user_name,
-                                           forwarded, topic, trace_id)
+                                           forwarded, topic, trace_id,
+                                           counterparty=counterparty_name)
                     elif state == "waiting_klo":
                         forward_to_klo(user_id, user_name,
-                                       forwarded, topic, trace_id)
+                                       forwarded, topic, trace_id,
+                                       counterparty=counterparty_name)
                         if topic == "checkout":
                             try:
                                 packaging_paid.clear_cart(user_id)
@@ -1386,7 +1405,8 @@ def _handle_text_message(update: dict, trace_id: str):
                                 pass
                     elif state == "waiting_buh":
                         forward_to_accountant(user_id, user_name,
-                                              forwarded, topic, trace_id)
+                                              forwarded, topic, trace_id,
+                                              counterparty=counterparty_name)
 
                     _confirm_and_maybe_return_ai(user_id, from_ai, trace_id,
                                                   topic, client_text=text)

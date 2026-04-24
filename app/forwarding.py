@@ -159,8 +159,14 @@ def _fallback_to_group(user_id: int, payload: dict, reason: str,
 
 
 def forward_to_manager(user_id: int, user_name: str, text: str,
-                       topic: str, trace_id: str | None = None):
-    """Основная логика пересылки — ищет менеджера по ИНН/договору, пересылает."""
+                       topic: str, trace_id: str | None = None,
+                       counterparty: str | None = None):
+    """Основная логика пересылки — ищет менеджера по ИНН/договору, пересылает.
+
+    Если counterparty передан явно (из ident-фазы router.py — надёжный источник),
+    используем его. Иначе пытаемся найти клиента повторно по содержимому text
+    через регулярки (обратная совместимость).
+    """
     phone = None
     try:
         phone = get_phone(user_id)
@@ -168,7 +174,9 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
         pass
 
     client = _lookup_client(text)
-    counterparty = (client or {}).get("name") or None
+    # Приоритет у явно переданного counterparty, но менеджера всё равно
+    # берём из найденного клиента (по ИНН) — это нужно для маршрутизации.
+    counterparty = counterparty or (client or {}).get("name") or None
     manager_name = (client or {}).get("manager_name") or ""
 
     msg_text = _format_manager_message(user_id, user_name, topic, text,
@@ -225,7 +233,8 @@ def forward_to_manager(user_id: int, user_name: str, text: str,
 
 
 def forward_to_klo(user_id: int, user_name: str, text: str,
-                   topic: str, trace_id: str | None = None):
+                   topic: str, trace_id: str | None = None,
+                   counterparty: str | None = None):
     """Пересылает запрос в КЛО (отдел работы с клиентами)."""
     phone = None
     try:
@@ -233,7 +242,7 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    counterparty = (_lookup_client(text) or {}).get("name") or None
+    counterparty = counterparty or (_lookup_client(text) or {}).get("name") or None
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown",
@@ -260,7 +269,8 @@ def forward_to_klo(user_id: int, user_name: str, text: str,
 
 
 def forward_to_accountant(user_id: int, user_name: str, text: str,
-                          topic: str, trace_id: str | None = None):
+                          topic: str, trace_id: str | None = None,
+                          counterparty: str | None = None):
     """Пересылает запрос бухгалтеру (обоим)."""
     phone = None
     try:
@@ -268,7 +278,7 @@ def forward_to_accountant(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    counterparty = (_lookup_client(text) or {}).get("name") or None
+    counterparty = counterparty or (_lookup_client(text) or {}).get("name") or None
     msg_text = _format_manager_message(user_id, user_name, topic, text,
                                         phone, counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown",
@@ -316,7 +326,8 @@ def forward_to_sales(user_id: int, user_name: str, text: str,
 
 
 def forward_new_client_to_group(user_id: int, user_name: str, text: str,
-                                 topic: str, trace_id: str | None = None) -> bool:
+                                 topic: str, trace_id: str | None = None,
+                                 counterparty: str | None = None) -> bool:
     """Клиент подтвердил ИНН/договор (повторил то же значение), но его нет
     в базе — возможно, это новый клиент, которого ещё не внесли. Уводим
     запрос в резервную группу, чтобы дежурные разобрались.
@@ -329,7 +340,8 @@ def forward_new_client_to_group(user_id: int, user_name: str, text: str,
     except Exception:
         pass
 
-    msg_text = _format_manager_message(user_id, user_name, topic, text, phone)
+    msg_text = _format_manager_message(user_id, user_name, topic, text, phone,
+                                        counterparty=counterparty)
     payload = {"text": msg_text, "format": "markdown",
                "attachments": _manager_actions(user_id)}
 
