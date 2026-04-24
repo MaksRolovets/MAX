@@ -224,6 +224,38 @@ def classify_ident_stage(text: str, trace_id: str | None = None) -> dict:
     }
 
 
+_EMAIL_RE = re.compile(r"[\w.+\-]+@[\w\-]+\.[a-zA-Z]{2,}")
+
+
+def _detect_contact_local(text: str) -> str | None:
+    """Локальная детекция контакта без AI.
+
+    Возвращает 'email' | 'phone' | None. Телефон = 7+ цифр после удаления
+    всех не-цифр (это покрывает форматы `+7 (999) 123-45-67`, `89991234567`,
+    «тел 89991234567» и т.п.). E-mail — стандартный regex.
+    """
+    if _EMAIL_RE.search(text):
+        return "email"
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 7:
+        return "phone"
+    return None
+
+
+_REFUSAL_KEYWORDS = (
+    "не хочу", "не дам", "не дадим", "не буду", "не укажу",
+    "нет телефона", "нет номера", "нет почты", "нет e-mail", "нет емейла",
+    "зачем вам", "зачем это", "никакого номера", "ничего не дам",
+    "почта не нужна", "без этого", "не надо", "без контакт",
+)
+
+
+def _detect_refusal_local(text: str) -> bool:
+    """Детекция явного отказа от контакта по ключевым фразам."""
+    t = text.lower()
+    return any(kw in t for kw in _REFUSAL_KEYWORDS)
+
+
 def classify_contact_stage(text: str, trace_id: str | None = None) -> dict:
     """Фаза контакта: прислал ли клиент телефон/e-mail или отказался.
 
@@ -233,34 +265,42 @@ def classify_contact_stage(text: str, trace_id: str | None = None) -> dict:
             "refuses_contact": bool,  # клиент явно отказался давать контакт
         }
 
-    При недоступности AI — считаем has_contact=False, refuses_contact=False
-    (бот переспросит один раз, если контакт так и не дадут — сработает
-    локальный счётчик попыток).
+    Стратегия:
+      1. Сначала локально проверяем контакт (regex) — быстро, без сети,
+         устойчиво к таймаутам OpenRouter. Если контакт найден — сразу True.
+      2. Если локально контакта нет — просим AI определить, отказ это
+         или просто не по теме. При недоступности AI — падаем к
+         локальной детекции отказа по ключевым словам.
     """
+    kind = _detect_contact_local(text)
+    if kind:
+        log_event("classify_contact_local_hit", trace_id,
+                  kind=kind, user_text=text[:100])
+        return {"has_contact": True, "refuses_contact": False}
+
     prompt = (
         "Ты классификатор сообщения клиента, которого только что попросили "
-        "прислать контактный телефон или e-mail.\n\n"
-        "Верни JSON с двумя полями:\n"
-        "1) has_contact (bool):\n"
-        "   true ТОЛЬКО если в сообщении есть фактический номер телефона "
-        "(минимум 7 цифр подряд, возможно со скобками/дефисами/+) ИЛИ e-mail "
-        "(адрес вида x@y.z).\n"
-        "   Слова «телефон», «почта» без самого значения — false.\n\n"
-        "2) refuses_contact (bool):\n"
-        "   true если клиент ЯВНО отказался: «нет телефона», «не хочу давать», "
+        "прислать контактный телефон или e-mail. В сообщении ТОЧНО нет "
+        "ни телефона, ни e-mail (это уже проверено). Нужно понять — "
+        "клиент ОТКАЗЫВАЕТСЯ давать контакт или просто написал что-то не по теме.\n\n"
+        "Верни JSON с одним полем:\n"
+        "refuses_contact (bool):\n"
+        "   true если клиент явно отказался: «нет телефона», «не хочу давать», "
         "«не дам», «зачем вам», «никакого номера», «ничего не дам», "
-        "«почта не нужна», «давайте без этого». Иначе false.\n"
-        "   Если клиент просто написал что-то не по теме без явного отказа — false.\n\n"
+        "«почта не нужна», «давайте без этого».\n"
+        "   false если клиент просто написал что-то не по теме без явного отказа.\n\n"
         f"Сообщение клиента: «{text}»\n\n"
         "Ответь СТРОГО одним JSON без markdown:\n"
-        '{"has_contact": false, "refuses_contact": false}'
+        '{"refuses_contact": false}'
     )
     ai = _call_classifier(prompt, trace_id, event_name="classify_contact")
     if ai is None:
-        log_event("classify_contact_fallback", trace_id, user_text=text[:150])
-        return {"has_contact": False, "refuses_contact": False}
+        refused = _detect_refusal_local(text)
+        log_event("classify_contact_fallback", trace_id,
+                  user_text=text[:150], local_refused=refused)
+        return {"has_contact": False, "refuses_contact": refused}
     return {
-        "has_contact": bool(ai.get("has_contact", False)),
+        "has_contact": False,  # локальная проверка выше вернула False
         "refuses_contact": bool(ai.get("refuses_contact", False)),
     }
 
