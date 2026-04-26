@@ -75,7 +75,8 @@ KLO_SPECIAL_DAYS = os.getenv("KLO_SPECIAL_DAYS", "").split(",") if os.getenv("KL
 # ── Выходные: дежурный сотрудник и праздники ──────────────────────
 # ID дежурного, которому в выходной уходят КЛО-запросы (создать заказ РФ,
 # вопросы по заказу, платная упаковка). Остальные запросы получают автоответ.
-WEEKEND_DUTY_USER_ID = int(os.getenv("WEEKEND_DUTY_USER_ID") or "0")
+WEEKEND_DUTY_USER_ID_DEFAULT = 229380995  # запасной КЛО (выходные/праздники)
+WEEKEND_DUTY_USER_ID = int(os.getenv("WEEKEND_DUTY_USER_ID") or str(WEEKEND_DUTY_USER_ID_DEFAULT))
 
 # Праздники в формате YYYY-MM-DD через запятую. В эти даты бот ведёт себя
 # как в выходной (Сб/Вс). Пример: "2026-01-01,2026-01-02,2026-05-09"
